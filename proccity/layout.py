@@ -1,0 +1,180 @@
+"""Turn a process snapshot into city geometry.
+
+Pure functions only: no psutil, no I/O, so the layout is unit-testable and the server is a
+thin shell around it. The rules, chosen so the picture means something:
+
+- A *district* is a top-level process (parent is PID 0/1/launchd) plus every descendant.
+  Related work sits together: a browser and its helpers, a shell and what it spawned.
+- Districts are placed on an outward spiral in first-seen order and never move. Buildings
+  inside a district fill a square grid in first-seen order and never move either. New
+  processes take the next free lot; a dead process's lot is released. A city you can watch
+  needs stable streets.
+- Building height is log-scaled resident memory (RSS), so a 10x memory hog is visibly but
+  not absurdly taller. Footprint is thread count. CPU lights the windows.
+"""
+from __future__ import annotations
+
+import math
+from dataclasses import dataclass, field
+
+ROOT_PPIDS = frozenset({0, 1})
+LOT = 1.6          # world units per building lot (building is ~1.0 wide, rest is street)
+DISTRICT_GAP = 3.0  # street between districts
+DISTRICT_SIDE = 8   # lots per side; 64 lots per district
+MIN_HEIGHT = 0.4
+HEIGHT_PER_LOG2_MB = 0.9
+
+
+@dataclass(frozen=True)
+class Proc:
+    pid: int
+    ppid: int
+    name: str
+    user: str
+    cpu: float          # percent, 0..(100*cores)
+    rss: int            # bytes
+    threads: int
+    status: str
+
+
+@dataclass
+class Building:
+    pid: int
+    name: str
+    user: str
+    district: int
+    x: float
+    z: float
+    width: float
+    height: float
+    cpu: float
+    rss: int
+    threads: int
+    status: str
+
+
+@dataclass
+class CityState:
+    """Everything the layout needs to remember between snapshots to stay stable."""
+    district_of_root: dict[int, int] = field(default_factory=dict)   # root pid -> district id
+    district_origin: dict[int, tuple[float, float]] = field(default_factory=dict)
+    lot_of_pid: dict[int, tuple[int, int]] = field(default_factory=dict)  # pid -> (district, lot)
+    lots_used: dict[int, set[int]] = field(default_factory=dict)      # district -> used lot idx
+    commons: list[int] = field(default_factory=list)                  # districts pooling loners
+    next_district: int = 0
+
+    def new_district(self) -> int:
+        d = self.next_district
+        self.next_district += 1
+        gx, gz = spiral(d)
+        pitch = DISTRICT_SIDE * LOT + DISTRICT_GAP   # fixed pitch: districts can never collide
+        self.district_origin[d] = (gx * pitch, gz * pitch)
+        self.lots_used[d] = set()
+        return d
+
+    def commons_with_room(self) -> int:
+        for d in self.commons:
+            if len(self.lots_used[d]) < DISTRICT_SIDE * DISTRICT_SIDE:
+                return d
+        d = self.new_district()
+        self.commons.append(d)
+        return d
+
+
+def root_of(pid: int, ppid_of: dict[int, int]) -> int:
+    """Walk up to the top-level ancestor. Guards against cycles and missing parents."""
+    seen = set()
+    while pid not in seen:
+        seen.add(pid)
+        parent = ppid_of.get(pid)
+        if parent is None or parent in ROOT_PPIDS or parent == pid or parent not in ppid_of:
+            return pid
+        pid = parent
+    return pid
+
+
+def spiral(n: int) -> tuple[int, int]:
+    """n-th cell of an outward square spiral from (0,0). Deterministic, no overlap."""
+    if n == 0:
+        return (0, 0)
+    k = math.ceil((math.sqrt(n + 1) - 1) / 2)   # ring index
+    t = 2 * k + 1
+    m = t * t
+    t -= 1
+    if n >= m - t:
+        return (k - (m - n), -k)
+    m -= t
+    if n >= m - t:
+        return (-k, -k + (m - n))
+    m -= t
+    if n >= m - t:
+        return (-k + (m - n), k)
+    return (k, k - (m - n - t))
+
+
+def height_for(rss: int) -> float:
+    mb = max(rss, 1) / (1024 * 1024)
+    return MIN_HEIGHT + HEIGHT_PER_LOG2_MB * math.log2(1 + mb)
+
+
+def width_for(threads: int) -> float:
+    return min(1.0, 0.45 + 0.08 * math.sqrt(max(threads, 1)))
+
+
+
+
+def layout(procs: list[Proc], state: CityState) -> list[Building]:
+    ppid_of = {p.pid: p.ppid for p in procs}
+    alive = {p.pid for p in procs}
+
+    # release lots of dead processes
+    for pid in [pid for pid in state.lot_of_pid if pid not in alive]:
+        district, lot = state.lot_of_pid.pop(pid)
+        state.lots_used.get(district, set()).discard(lot)
+
+    # group by top-level ancestor, stable first-seen order
+    by_root: dict[int, list[Proc]] = {}
+    for p in sorted(procs, key=lambda p: p.pid):
+        by_root.setdefault(root_of(p.pid, ppid_of), []).append(p)
+
+    # A family (root + children) gets its own district. A loner (a top-level process with no
+    # children; most of a macOS/systemd process table) is pooled into a shared commons
+    # district so the city is dense instead of one tower per empty block. A loner that later
+    # spawns children keeps its lot; the children join it in the commons.
+    side = DISTRICT_SIDE
+
+    def take_lot(d: int) -> int | None:
+        used = state.lots_used[d]
+        lot = next((i for i in range(side * side) if i not in used), None)
+        if lot is not None:
+            used.add(lot)
+        return lot
+
+    for root, members in by_root.items():
+        if root not in state.district_of_root:
+            if len(members) > 1:
+                state.district_of_root[root] = state.new_district()
+            else:
+                d = state.commons_with_room()          # has room by construction
+                state.district_of_root[root] = d
+                state.lot_of_pid[root] = (d, take_lot(d))
+
+    out: list[Building] = []
+    for root, members in by_root.items():
+        d = state.district_of_root[root]
+        for p in members:
+            if p.pid not in state.lot_of_pid:
+                lot = take_lot(d)
+                if lot is None:
+                    continue  # district full; overflow is dropped rather than overlapped
+                state.lot_of_pid[p.pid] = (d, lot)
+            d_actual, lot = state.lot_of_pid[p.pid]
+            ox, oz = state.district_origin[d_actual]
+            lx, lz = lot % side, lot // side
+            out.append(Building(
+                pid=p.pid, name=p.name, user=p.user, district=d_actual,
+                x=ox + lx * LOT, z=oz + lz * LOT,
+                width=width_for(p.threads), height=height_for(p.rss),
+                cpu=p.cpu, rss=p.rss, threads=p.threads, status=p.status,
+            ))
+    return out

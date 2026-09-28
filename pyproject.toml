@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "proccity"
+version = "0.1.0"
+description = "Your running processes as a living 3D city. Height = memory, footprint = threads, glow = CPU."
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.10"
+dependencies = ["psutil==7.2.2"]
+
+[project.optional-dependencies]
+dev = ["pytest==9.1.1"]
+
+[project.scripts]
+proccity = "proccity.server:main"
+
+[tool.setuptools]
+packages = ["proccity"]
+
+[tool.setuptools.package-data]
+proccity = ["static/*.html"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-p no:asyncio -p no:cacheprovider"
