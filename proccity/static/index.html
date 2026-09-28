@@ -4,23 +4,23 @@
 <meta charset="utf-8">
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' https://unpkg.com 'sha256-gLmT9T9ikTmubPocehiyCVBS4sada1KL0IZ/aHmu7Ag='; style-src 'self'; connect-src 'self'; img-src 'self'; base-uri 'none'; form-action 'none'">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="color-scheme" content="dark">
+<meta name="color-scheme" content="light">
 <title>proccity</title>
 <link rel="stylesheet" href="/static/app.css">
 <script type="importmap">{"imports":{"three":"https://unpkg.com/three@0.160.0/build/three.module.js","three/addons/":"https://unpkg.com/three@0.160.0/examples/jsm/"},"integrity":{"https://unpkg.com/three@0.160.0/build/three.module.js":"sha384-61S/Nu32S3E5+n+KpCOTb2eRYps6fVKm+9Gz1QBvSePFthb46f063Aa/qe/lykFZ","https://unpkg.com/three@0.160.0/examples/jsm/controls/OrbitControls.js":"sha384-qlO/ZugKPxAQUAvTlQoo0QECzxJIJySZmCF/DHdb2Xn/hHndFwX/vfUAC9Hbk6LP"}}</script>
 </head>
 <body>
 <header id="hud">
-  <div id="status" role="status" aria-live="polite">proccity · connecting…</div>
+  <div id="status" role="status" aria-live="polite">🏙️ waking up city hall…</div>
   <label for="q" class="sr-only">Highlight processes by name</label>
-  <input id="q" type="search" placeholder="highlight by name…" autocomplete="off" spellcheck="false">
+  <input id="q" type="search" placeholder="find a building… (e.g. chrome)" autocomplete="off" spellcheck="false">
 </header>
 <aside id="top" aria-label="Busiest processes">
-  <h2>Top by CPU</h2><ol id="topcpu"></ol>
-  <h2>Top by memory</h2><ol id="topmem"></ol>
+  <h2>🔥 Burning CPU</h2><ol id="topcpu"></ol>
+  <h2>🐘 Hoarding RAM</h2><ol id="topmem"></ol>
 </aside>
 <div id="tip" role="tooltip" hidden></div>
-<footer id="legend">height = memory (log) · footprint = threads · glow = CPU · colour = user<br>drag to orbit · wheel to zoom · hover a building · click a top entry to fly to it</footer>
+<footer id="legend">tall = greedy for RAM · wide = many threads · smoking &amp; wobbling = burning CPU · colour = neighbourhood (a parent and its children) · roof = user · 👑 = the Mayor (biggest RAM hog) · green = zombie<br>drag to orbit · wheel to zoom · hover a building · click a top entry to fly there</footer>
 <canvas id="city" aria-label="3D city of running processes; use the top lists and tooltip for text"></canvas>
 <script type="module" src="/static/app.js"></script>
 </body>
