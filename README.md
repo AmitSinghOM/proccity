@@ -3,20 +3,50 @@
 Your running processes as a living 3D city. Each building is a process. The city changes as
 your system changes: new processes rise out of the ground, dead ones sink, busy ones glow.
 
-![proccity rendering ~450 processes as districts of buildings, with CPU-hot processes glowing amber and a top-by-CPU / top-by-memory panel](docs/screenshot.png)
+![proccity: a cel-shaded pastel city of ~450 buildings on grey blocks under a blue sky, a crown on the tallest, sticker-style panels listing the processes burning CPU and hoarding RAM](docs/screenshot.png)
 
 - **Height** = resident memory (log scale, so a 10x hog is visibly, not absurdly, taller)
 - **Footprint** = thread count
-- **Glow** = CPU (one full core lights the windows fully)
-- **Colour** = owning user
+- **Smoke and wobble** = CPU (one full core and the building is visibly having a bad day)
+- **Colour** = neighbourhood; **roof colour** = owning user
 - **District** = a top-level process and its descendants (a browser and its helpers, a shell
   and what it spawned). Loner processes are pooled into shared "commons" blocks so a typical
   400-process macOS/Linux table is a dense city, not a suburb.
 
 Streets are stable: a process keeps its lot for life, a released lot goes to the next
 newcomer, and a family's block is released when the family is gone. Type in the search box
-to highlight processes by name; click an entry in the top-by-CPU / top-by-memory panel to
-fly the camera to it. Honours `prefers-reduced-motion`.
+to highlight processes by name; click an entry in the 🔥 Burning CPU / 🐘 Hoarding RAM panel
+to fly the camera to it. Honours `prefers-reduced-motion`.
+
+It is deliberately a cartoon: cel-shaded pastel neighbourhoods with ink outlines, pyramid
+roofs, a lazy sun and clouds that are three spheres in a trench coat. Buildings burning CPU
+wobble and puff smoke. Zombies are green. Newborns bounce; the dead squash and vanish. The
+biggest RAM hog wears a spinning crown and is addressed as the Mayor. Every tooltip ends with
+an unsolicited opinion.
+
+## Fun things to do with it
+
+- **Watch `npm install` eat your laptop.** Start it, run the install, and watch a new
+  neighbourhood sprout hundreds of buildings and then collapse. Oddly satisfying.
+- **Find out what Chrome is doing at 3 am.** Type `chrome` in the box. Everything else fades.
+  Count the helpers. Reconsider your tabs.
+- **Second-monitor screensaver during a long build.** Compilers are a district that grows,
+  smokes, and dies. You will know the build finished without alt-tabbing.
+- **`kill -9` therapy.** Find the offender in the 🔥 panel, click to fly there, kill it in a
+  terminal, and watch the block squash flat. Better than a stress ball.
+- **Explain processes to someone who has never seen `ps`.** Parent and children live on the
+  same block; threads make a building wide; memory makes it tall; CPU makes it smoke. A five
+  year old gets it. Most onboarding docs don't manage that.
+- **Spot a fork bomb before it's a problem.** A single neighbourhood filling every lot and
+  spilling into a second block is a fork storm. You'll see it a good ten seconds before the
+  fan does.
+- **Interview prop.** Ask a candidate why one building is tall but not smoking, or wide but
+  short. It's a memory / CPU / threads conversation with a picture, and nobody can bluff it.
+- **Compare your tools' appetites.** Docker Desktop, the IDE, the browser and the chat app
+  each get their own block. Line them up. Judge quietly.
+- **Zombie hunt.** Green buildings are processes that exited but whose parent never called
+  `wait()`. Find the parent (same block), have a word with its developer.
+- **Impress exactly no one at a party** but yourself, at 3 am, watching your machine breathe.
 
 ## Run
 
