@@ -16,7 +16,9 @@ your system changes: new processes rise out of the ground, dead ones sink, busy 
 Streets are stable: a process keeps its lot for life, a released lot goes to the next
 newcomer, and a family's block is released when the family is gone. Type in the search box
 to highlight processes by name; click an entry in the 🔥 Burning CPU / 🐘 Hoarding RAM panel
-to fly the camera to it. Honours `prefers-reduced-motion`.
+to fly the camera to it. Walk around with the arrow keys or WASD, rotate with Q / E, zoom
+with + / −, press H to go home, or use the on-screen D-pad (works on touch). Honours
+`prefers-reduced-motion`.
 
 It is deliberately a cartoon: cel-shaded pastel neighbourhoods with ink outlines, pyramid
 roofs, a lazy sun and clouds that are three spheres in a trench coat. Buildings burning CPU

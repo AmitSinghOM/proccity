@@ -14,6 +14,16 @@ html, body { margin: 0; height: 100%; background: #9edcff; color: #24233a; font:
 #top li button span:last-child { color: #d94f2b; font-variant-numeric: tabular-nums; }
 #tip { position: fixed; z-index: 3; padding: 8px 10px; background: #fffdf5; color: #24233a; border: 3px solid #24233a; border-radius: 12px; box-shadow: 4px 4px 0 #24233a; pointer-events: none; white-space: pre; font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 12px; }
 #tip[hidden] { display: none; }
-#legend { position: fixed; right: 12px; bottom: 10px; z-index: 2; text-align: right; background: rgba(255,253,245,.85); border-radius: 10px; padding: 6px 10px; font-weight: 600; }
+#pad { position: fixed; left: 12px; bottom: 10px; z-index: 2; display: grid; grid-template-columns: repeat(3, 44px); gap: 6px; }
+#pad button { all: unset; box-sizing: border-box; height: 44px; text-align: center; line-height: 38px; font-size: 18px; font-weight: 800; background: #fffdf5; color: #24233a; border: 3px solid #24233a; border-radius: 12px; box-shadow: 3px 3px 0 #24233a; cursor: pointer; user-select: none; touch-action: none; }
+#pad button:hover { background: #ffe9a8; }
+#pad button:active, #pad button.held { transform: translate(2px, 2px); box-shadow: 1px 1px 0 #24233a; background: #ffd23f; }
+#pad button:focus-visible { outline: 3px solid #ffd23f; outline-offset: 2px; }
+#legend { position: fixed; right: 12px; bottom: 10px; left: 176px; z-index: 2; text-align: right; background: rgba(255,253,245,.85); border-radius: 10px; padding: 6px 10px; font-weight: 600; }
 .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
-@media (max-width: 720px) { #top { display: none; } #legend { display: none; } }
+@media (max-width: 720px) { #top { display: none; } #pad { position: fixed; left: 12px; bottom: 10px; z-index: 2; display: grid; grid-template-columns: repeat(3, 44px); gap: 6px; }
+#pad button { all: unset; box-sizing: border-box; height: 44px; text-align: center; line-height: 38px; font-size: 18px; font-weight: 800; background: #fffdf5; color: #24233a; border: 3px solid #24233a; border-radius: 12px; box-shadow: 3px 3px 0 #24233a; cursor: pointer; user-select: none; touch-action: none; }
+#pad button:hover { background: #ffe9a8; }
+#pad button:active, #pad button.held { transform: translate(2px, 2px); box-shadow: 1px 1px 0 #24233a; background: #ffd23f; }
+#pad button:focus-visible { outline: 3px solid #ffd23f; outline-offset: 2px; }
+#legend { display: none; } }

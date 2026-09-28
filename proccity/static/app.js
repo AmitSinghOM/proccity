@@ -176,6 +176,7 @@ async function poll() {
       const cx = snap.buildings.reduce((a, b) => a + b.x, 0) / snap.buildings.length;
       const cz = snap.buildings.reduce((a, b) => a + b.z, 0) / snap.buildings.length;
       controls.target.set(cx, 0, cz); camera.position.set(cx + 38, 34, cz + 38); centered = true;
+      homeTarget = new THREE.Vector3(cx, 0, cz);
     }
     const totalRss = snap.buildings.reduce((a, b) => a + b.rss, 0);
     const hot = snap.buildings.filter(b => b.cpu >= 50).length;
@@ -190,6 +191,55 @@ function bold(t) { const b = document.createElement('b'); b.textContent = String
 setInterval(poll, 2000); poll();
 
 q.addEventListener('input', () => { needle = q.value.trim().toLowerCase(); for (const e of buildings.values()) restyle(e); });
+
+// ---- walking around: arrows / WASD move, Q E rotate, + - zoom, H home; same via the D-pad ---
+const KEYS = { ArrowUp: 'up', KeyW: 'up', ArrowDown: 'down', KeyS: 'down', ArrowLeft: 'left', KeyA: 'left',
+  ArrowRight: 'right', KeyD: 'right', KeyQ: 'rotl', KeyE: 'rotr', Equal: 'in', NumpadAdd: 'in',
+  Minus: 'out', NumpadSubtract: 'out', KeyH: 'home' };
+const held = new Set();
+let homeTarget = null;
+function pressed(k, on) {
+  if (k === 'home') { if (on && homeTarget) { controls.target.copy(homeTarget); camera.position.set(homeTarget.x + 38, 34, homeTarget.z + 38); } return; }
+  on ? held.add(k) : held.delete(k);
+  document.querySelectorAll(`#pad button[data-k="${k}"]`).forEach(b => b.classList.toggle('held', on));
+}
+addEventListener('keydown', ev => {
+  if (ev.target === q) return;                       // typing in the search box
+  const k = KEYS[ev.code]; if (!k) return;
+  ev.preventDefault(); pressed(k, true);
+});
+addEventListener('keyup', ev => { const k = KEYS[ev.code]; if (k) pressed(k, false); });
+addEventListener('blur', () => { for (const k of [...held]) pressed(k, false); });
+for (const b of document.querySelectorAll('#pad button')) {
+  const k = b.dataset.k;
+  b.addEventListener('pointerdown', ev => { ev.preventDefault(); b.setPointerCapture(ev.pointerId); pressed(k, true); });
+  for (const evn of ['pointerup', 'pointercancel', 'lostpointercapture']) b.addEventListener(evn, () => pressed(k, false));
+  b.addEventListener('keydown', ev => { if (ev.code === 'Space' || ev.code === 'Enter') { ev.preventDefault(); pressed(k, true); } });
+  b.addEventListener('keyup', ev => { if (ev.code === 'Space' || ev.code === 'Enter') pressed(k, false); });
+}
+const _fwd = new THREE.Vector3(), _right = new THREE.Vector3(), _off = new THREE.Vector3();
+function walk(dt) {
+  if (!held.size) return;
+  const dist = camera.position.distanceTo(controls.target);
+  const speed = Math.max(6, dist * 0.6) * dt;         // farther out, faster
+  camera.getWorldDirection(_fwd); _fwd.y = 0; _fwd.normalize();
+  _right.crossVectors(_fwd, camera.up).normalize();
+  const move = new THREE.Vector3();
+  if (held.has('up')) move.add(_fwd); if (held.has('down')) move.sub(_fwd);
+  if (held.has('right')) move.add(_right); if (held.has('left')) move.sub(_right);
+  if (move.lengthSq()) { move.normalize().multiplyScalar(speed); camera.position.add(move); controls.target.add(move); }
+  if (held.has('rotl') || held.has('rotr')) {
+    _off.subVectors(camera.position, controls.target);
+    _off.applyAxisAngle(camera.up, (held.has('rotl') ? 1 : -1) * 1.6 * dt);
+    camera.position.copy(controls.target).add(_off);
+  }
+  if (held.has('in') || held.has('out')) {
+    _off.subVectors(camera.position, controls.target);
+    const f = held.has('in') ? Math.pow(0.35, dt) : Math.pow(1 / 0.35, dt);
+    if ((f < 1 && _off.length() > 6) || (f > 1 && _off.length() < 300)) _off.multiplyScalar(f);
+    camera.position.copy(controls.target).add(_off);
+  }
+}
 
 // hover
 const ray = new THREE.Raycaster(); const mouse = new THREE.Vector2(-2, -2); let px = 0, py = 0;
@@ -239,6 +289,7 @@ function animate() {
     tip.textContent = `${d.name}  (pid ${d.pid})\nuser    ${d.user}\ncpu     ${d.cpu.toFixed(1)}%\nrss     ${fmtMiB(d.rss)}\nthreads ${d.threads}\nstatus  ${d.status}\n\n${quip(d)}`;
     tip.hidden = false; placeTip();
   } else { tip.hidden = true; }
+  walk(dt);
   controls.update(); renderer.render(scene, camera);
   requestAnimationFrame(animate);
 }

@@ -19,8 +19,19 @@
   <h2>🔥 Burning CPU</h2><ol id="topcpu"></ol>
   <h2>🐘 Hoarding RAM</h2><ol id="topmem"></ol>
 </aside>
+<nav id="pad" aria-label="Move around the city">
+  <button type="button" data-k="rotl" aria-label="Rotate left" title="Rotate left (Q)">⟲</button>
+  <button type="button" data-k="up" aria-label="Move forward" title="Forward (↑ / W)">▲</button>
+  <button type="button" data-k="rotr" aria-label="Rotate right" title="Rotate right (E)">⟳</button>
+  <button type="button" data-k="left" aria-label="Move left" title="Left (← / A)">◀</button>
+  <button type="button" data-k="down" aria-label="Move back" title="Back (↓ / S)">▼</button>
+  <button type="button" data-k="right" aria-label="Move right" title="Right (→ / D)">▶</button>
+  <button type="button" data-k="in" aria-label="Zoom in" title="Zoom in (+)">＋</button>
+  <button type="button" data-k="home" aria-label="Back to city centre" title="Centre (H)">⌂</button>
+  <button type="button" data-k="out" aria-label="Zoom out" title="Zoom out (−)">－</button>
+</nav>
 <div id="tip" role="tooltip" hidden></div>
-<footer id="legend">tall = greedy for RAM · wide = many threads · smoking &amp; wobbling = burning CPU · colour = neighbourhood (a parent and its children) · roof = user · 👑 = the Mayor (biggest RAM hog) · green = zombie<br>drag to orbit · wheel to zoom · hover a building · click a top entry to fly there</footer>
+<footer id="legend">tall = greedy for RAM · wide = many threads · smoking &amp; wobbling = burning CPU · colour = neighbourhood (a parent and its children) · roof = user · 👑 = the Mayor (biggest RAM hog) · green = zombie<br>arrows / WASD to move · Q E to rotate · + − to zoom · H to centre · drag to orbit · hover a building · click a top entry to fly there</footer>
 <canvas id="city" aria-label="3D city of running processes; use the top lists and tooltip for text"></canvas>
 <script type="module" src="/static/app.js"></script>
 </body>

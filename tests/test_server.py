@@ -121,3 +121,17 @@ def test_bad_arguments_are_rejected(argv):
     with pytest.raises(SystemExit) as e:
         main(argv)
     assert e.value.code == 2
+
+
+# ---- Design: the D-pad is real, labelled, and every key has a button twin ----------------
+
+def test_dpad_has_nine_labelled_controls():
+    html = (STATIC / "index.html").read_text()
+    pad = re.search(r'<nav id="pad".*?</nav>', html, re.S).group(0)
+    buttons = re.findall(r'<button type="button" data-k="(\w+)" aria-label="([^"]+)"', pad)
+    assert [k for k, _ in buttons] == ["rotl", "up", "rotr", "left", "down", "right",
+                                       "in", "home", "out"]
+    assert all(label for _, label in buttons)
+    js = (STATIC / "app.js").read_text()
+    for k in ("up", "down", "left", "right", "rotl", "rotr", "in", "out", "home"):
+        assert f"'{k}'" in js, f"key action {k} has no handler"
