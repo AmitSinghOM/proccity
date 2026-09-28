@@ -1,0 +1,17 @@
+html, body { margin: 0; height: 100%; background: #070a12; color: #cfd6e6; font: 13px/1.45 ui-monospace, Menlo, Consolas, monospace; overflow: hidden; }
+#city { position: fixed; inset: 0; display: block; }
+#hud { position: fixed; left: 12px; top: 10px; display: flex; gap: 12px; align-items: center; z-index: 2; text-shadow: 0 1px 2px #000; }
+#status b { color: #fff; }
+#q { background: rgba(10,14,24,.85); color: #e6ebf5; border: 1px solid #2a3350; border-radius: 4px; padding: 4px 8px; font: inherit; width: 16em; }
+#q:focus-visible { outline: 2px solid #8fb3ff; outline-offset: 1px; }
+#top { position: fixed; right: 12px; top: 10px; z-index: 2; width: 19em; background: rgba(10,14,24,.82); border: 1px solid #1f2740; border-radius: 6px; padding: 6px 10px 8px; }
+#top h2 { margin: 6px 0 2px; font-size: 11px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: #8a94ad; }
+#top ol { margin: 0; padding: 0; list-style: none; }
+#top li button { all: unset; display: flex; justify-content: space-between; gap: 8px; width: 100%; padding: 2px 4px; border-radius: 3px; cursor: pointer; color: #cfd6e6; }
+#top li button:hover, #top li button:focus-visible { background: #1b2340; color: #fff; outline: none; }
+#top li button span:last-child { color: #ffb84d; font-variant-numeric: tabular-nums; }
+#tip { position: fixed; z-index: 3; padding: 6px 8px; background: rgba(10,14,24,.92); border: 1px solid #2a3350; border-radius: 4px; pointer-events: none; white-space: pre; }
+#tip[hidden] { display: none; }
+#legend { position: fixed; right: 12px; bottom: 10px; z-index: 2; text-align: right; opacity: .75; }
+.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+@media (max-width: 720px) { #top { display: none; } #legend { display: none; } }

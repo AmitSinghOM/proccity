@@ -12,7 +12,7 @@ requires-python = ">=3.10"
 dependencies = ["psutil==7.2.2"]
 
 [project.optional-dependencies]
-dev = ["pytest==9.1.1"]
+dev = ["pytest==9.1.1", "ruff==0.15.4"]
 
 [project.scripts]
 proccity = "proccity.server:main"
@@ -26,3 +26,11 @@ proccity = ["static/*.html"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-p no:asyncio -p no:cacheprovider"
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "S"]
+per-file-ignores = { "tests/*" = ["S101", "S104"] }

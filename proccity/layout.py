@@ -61,15 +61,22 @@ class CityState:
     lot_of_pid: dict[int, tuple[int, int]] = field(default_factory=dict)  # pid -> (district, lot)
     lots_used: dict[int, set[int]] = field(default_factory=dict)      # district -> used lot idx
     commons: list[int] = field(default_factory=list)                  # districts pooling loners
+    free_districts: list[int] = field(default_factory=list)           # released ids, reused first
     next_district: int = 0
 
     def new_district(self) -> int:
-        d = self.next_district
-        self.next_district += 1
+        # Reuse a released block before spiralling outward, so a long-running city does not
+        # creep away from the origin as families come and go.
+        d = self.free_districts.pop(0) if self.free_districts else self._fresh_district()
         gx, gz = spiral(d)
         pitch = DISTRICT_SIDE * LOT + DISTRICT_GAP   # fixed pitch: districts can never collide
         self.district_origin[d] = (gx * pitch, gz * pitch)
         self.lots_used[d] = set()
+        return d
+
+    def _fresh_district(self) -> int:
+        d = self.next_district
+        self.next_district += 1
         return d
 
     def commons_with_room(self) -> int:
@@ -79,6 +86,17 @@ class CityState:
         d = self.new_district()
         self.commons.append(d)
         return d
+
+    def release_empty_districts(self) -> None:
+        """Drop family districts with no buildings left. Commons blocks are kept: they are
+        shared, and keeping them is what makes loner positions stable."""
+        for d in [d for d, used in self.lots_used.items() if not used and d not in self.commons]:
+            del self.lots_used[d]
+            del self.district_origin[d]
+            self.free_districts.append(d)
+            for root in [r for r, dd in self.district_of_root.items() if dd == d]:
+                del self.district_of_root[root]
+        self.free_districts.sort()
 
 
 def root_of(pid: int, ppid_of: dict[int, int]) -> int:
@@ -127,10 +145,11 @@ def layout(procs: list[Proc], state: CityState) -> list[Building]:
     ppid_of = {p.pid: p.ppid for p in procs}
     alive = {p.pid for p in procs}
 
-    # release lots of dead processes
+    # release lots of dead processes, then any family block that emptied out
     for pid in [pid for pid in state.lot_of_pid if pid not in alive]:
         district, lot = state.lot_of_pid.pop(pid)
         state.lots_used.get(district, set()).discard(lot)
+    state.release_empty_districts()
 
     # group by top-level ancestor, stable first-seen order
     by_root: dict[int, list[Proc]] = {}
@@ -151,13 +170,18 @@ def layout(procs: list[Proc], state: CityState) -> list[Building]:
         return lot
 
     for root, members in by_root.items():
-        if root not in state.district_of_root:
-            if len(members) > 1:
-                state.district_of_root[root] = state.new_district()
-            else:
-                d = state.commons_with_room()          # has room by construction
-                state.district_of_root[root] = d
-                state.lot_of_pid[root] = (d, take_lot(d))
+        if root in state.district_of_root:
+            continue
+        if root in state.lot_of_pid:
+            # An orphan: its parent died and the OS re-parented it, so it is a root now. It
+            # already owns a lot; its district is wherever that lot is.
+            state.district_of_root[root] = state.lot_of_pid[root][0]
+        elif len(members) > 1:
+            state.district_of_root[root] = state.new_district()
+        else:
+            d = state.commons_with_room()          # has room by construction
+            state.district_of_root[root] = d
+            state.lot_of_pid[root] = (d, take_lot(d))
 
     out: list[Building] = []
     for root, members in by_root.items():
