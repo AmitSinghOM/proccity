@@ -120,3 +120,54 @@ def test_orphaned_child_keeps_its_lot_and_takes_no_second_one():
     assert second[11] == first[11]
     used_after = sum(len(s) for s in state.lots_used.values())
     assert used_after == 1, (used_before, used_after)
+
+
+def test_dead_loners_do_not_leak_root_bookkeeping():
+    """Review 2, Staff R5: commons blocks are never released (by design), so the root->district
+    map for loners must be pruned when the loner dies, or every short-lived process (each
+    `ls`, each cron child) leaves an entry behind forever."""
+    state = CityState()
+    for i in range(200):
+        layout([P(10_000 + i, 1)], state)          # one loner alive at a time, 200 generations
+    assert len(state.lot_of_pid) == 1
+    assert len(state.district_of_root) == 1
+    assert sum(len(s) for s in state.lots_used.values()) == 1
+
+
+def test_recycled_pid_of_a_dead_family_root_is_not_glued_to_the_old_district():
+    """PID reuse: the OS hands a dead root's pid to an unrelated new family. It must be placed
+    fresh, not into the old family's (possibly since-released) district."""
+    state = CityState()
+    layout([P(10, 1), P(11, 10)], state)
+    layout([P(20, 1), P(21, 20)], state)               # family 10 fully gone, block released
+    assert 10 not in state.district_of_root
+    out = layout([P(20, 1), P(21, 20), P(10, 1), P(12, 10)], state)   # pid 10 recycled
+    d = {b.pid: b.district for b in out}
+    assert d[10] == d[12] and d[10] != d[20]
+    assert d[10] in state.district_origin           # placed somewhere real
+
+
+def test_geometry_is_rounded_for_the_wire():
+    """Network N2: 17.400000000000002 costs bytes every two seconds and means nothing."""
+    out = layout([P(10, 1), P(11, 10, threads=27, rss=38_289_408)], CityState())
+    for b in out:
+        for v in (b.x, b.z, b.width, b.height):
+            assert v == round(v, 3), v
+
+
+def test_a_family_bigger_than_a_block_spills_into_commons_instead_of_vanishing():
+    """Review 2, Product P3: a browser with 70 helper processes overflowed its 64-lot block and
+    the extra six were dropped from the city with nothing on screen to say so. Every process
+    must get a building; overflow goes to the commons."""
+    procs = [P(10, 1)] + [P(100 + i, 10) for i in range(75)]
+    state = CityState()
+    out = layout(procs, state)
+    assert len(out) == 76
+    coords = [(b.x, b.z) for b in out]
+    assert len(set(coords)) == 76
+    family = {b.district for b in out if b.pid == 10}
+    spilled = [b for b in out if b.district not in family]
+    assert len(spilled) == 12 and {b.district for b in spilled} <= set(state.commons)
+    # and they stay put next snapshot
+    again = {b.pid: (b.x, b.z) for b in layout(procs, state)}
+    assert again == {b.pid: (b.x, b.z) for b in out}

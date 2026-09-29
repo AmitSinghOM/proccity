@@ -149,6 +149,11 @@ def layout(procs: list[Proc], state: CityState) -> list[Building]:
     for pid in [pid for pid in state.lot_of_pid if pid not in alive]:
         district, lot = state.lot_of_pid.pop(pid)
         state.lots_used.get(district, set()).discard(lot)
+    # A dead root's bookkeeping goes too. Commons blocks are never released, so without this
+    # every short-lived loner (each `ls`, each cron child) would leave an entry behind forever,
+    # and a recycled pid would inherit a stranger's district.
+    for root in [r for r in state.district_of_root if r not in alive]:
+        del state.district_of_root[root]
     state.release_empty_districts()
 
     # group by top-level ancestor, stable first-seen order
@@ -190,15 +195,21 @@ def layout(procs: list[Proc], state: CityState) -> list[Building]:
             if p.pid not in state.lot_of_pid:
                 lot = take_lot(d)
                 if lot is None:
-                    continue  # district full; overflow is dropped rather than overlapped
-                state.lot_of_pid[p.pid] = (d, lot)
+                    # District full (a browser with 70 helpers). Never drop a process from
+                    # the picture: it moves to the commons and loses its family colour, which
+                    # is honest and visible, where a missing building is neither.
+                    d_spill = state.commons_with_room()
+                    lot = take_lot(d_spill)
+                    state.lot_of_pid[p.pid] = (d_spill, lot)
+                else:
+                    state.lot_of_pid[p.pid] = (d, lot)
             d_actual, lot = state.lot_of_pid[p.pid]
             ox, oz = state.district_origin[d_actual]
             lx, lz = lot % side, lot // side
             out.append(Building(
                 pid=p.pid, name=p.name, user=p.user, district=d_actual,
-                x=ox + lx * LOT, z=oz + lz * LOT,
-                width=width_for(p.threads), height=height_for(p.rss),
-                cpu=p.cpu, rss=p.rss, threads=p.threads, status=p.status,
+                x=round(ox + lx * LOT, 3), z=round(oz + lz * LOT, 3),
+                width=round(width_for(p.threads), 3), height=round(height_for(p.rss), 3),
+                cpu=round(p.cpu, 1), rss=p.rss, threads=p.threads, status=p.status,
             ))
     return out

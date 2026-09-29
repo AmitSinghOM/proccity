@@ -69,9 +69,11 @@ The snapshot exposes process names, users and memory for this machine, so:
 - Requests whose `Host` header is not loopback get `421`. That defeats DNS rebinding, the one
   way a web page you visit could otherwise read a loopback service as same-origin.
 - Static files are served from an allowlist of four paths, not a directory.
-- The page ships a Content-Security-Policy (no inline script, no eval), and the Three.js
-  import map is version-pinned with SRI `integrity` hashes, so the CDN cannot swap the code
-  under you. The frontend never uses `innerHTML`.
+- The page ships a Content-Security-Policy (no inline script, no eval) whose `script-src`
+  allows only the pinned `three@<version>/` path on the CDN, and the Three.js import map is
+  version-pinned with SRI `integrity` hashes for every module the app imports, so the CDN
+  cannot swap the code under you. The frontend never uses `innerHTML`.
+- Only `GET` and `HEAD` are served; other verbs get `405`, and error pages are plain text.
 - Response headers: `Cache-Control: no-store`, `X-Content-Type-Options: nosniff`,
   `X-Frame-Options: DENY`, `Referrer-Policy: no-referrer`.
 
@@ -87,11 +89,21 @@ it would remove that dependency; see the review notes for why it is not done yet
 
 `proccity/layout.py` is a pure module (no psutil, no I/O), so the layout tests cover district
 grouping, lot stability, block release and reuse, orphan re-parenting, no-overlap, commons
-overflow and the log-scaled height without touching a real process table. The server tests
-start a real `ThreadingHTTPServer` on an ephemeral port and check the Host guard, the static
-allowlist, the security headers, and that the CSP hash still matches the import map bytes.
+overflow (a family bigger than a block spills into the commons rather than vanishing) and the
+log-scaled height without touching a real process table. The server tests start a real
+`ThreadingHTTPServer` on an ephemeral port and check the Host guard, the static allowlist,
+the security headers, HEAD/405 handling, keep-alive, that the CSP hash still matches the
+import map bytes, that every CDN module the app imports has an SRI hash, and that a clean
+wheel actually ships every static file (an editable install hides that).
 
-Review record: [docs/REVIEW-2026-09-29.md](docs/REVIEW-2026-09-29.md).
+`tests/test_browser.py` loads the page in headless Chrome under the real CSP + SRI and fails
+on any console error or policy refusal, then checks the HUD reached "population N". It skips
+without a Chrome binary locally; CI sets `PROCCITY_REQUIRE_BROWSER=1` so a missing browser
+there is a failure, not a silent skip. The harness first proves it can see a `console.error`
+at all, so a clean console means something.
+
+Review records: [docs/REVIEW-2026-09-29.md](docs/REVIEW-2026-09-29.md) (pass 1, five seats)
+and [docs/REVIEW-2026-09-29-pass-2.md](docs/REVIEW-2026-09-29-pass-2.md) (pass 2, six seats).
 
 ## Built for fun
 

@@ -106,6 +106,32 @@ def test_import_map_pins_versions_and_integrity():
     assert all(v.startswith("sha384-") for v in imap["integrity"].values())
 
 
+def test_every_cdn_module_the_app_imports_has_an_integrity_hash_and_csp_is_version_scoped():
+    """Review 2, Security S5: `three/addons/` maps a whole directory and CSP allowed all of
+    unpkg.com, so a future `import 'three/addons/X.js'` would load with no integrity check
+    from any package on the CDN. Resolve each import the app makes and require a hash; scope
+    script-src to the pinned version's path."""
+    html = (STATIC / "index.html").read_text()
+    imap = json.loads(re.search(r'<script type="importmap">(.*?)</script>', html, re.S).group(1))
+    js = (STATIC / "app.js").read_text()
+    specs = re.findall(r"""from\s+['"]([^'"]+)['"]""", js)
+    assert specs, "no imports found"
+    resolved = []
+    for spec in specs:
+        if spec in imap["imports"]:
+            resolved.append(imap["imports"][spec])
+            continue
+        prefix = next(p for p in imap["imports"] if p.endswith("/") and spec.startswith(p))
+        resolved.append(imap["imports"][prefix] + spec[len(prefix):])
+    for url in resolved:
+        assert url in imap["integrity"], f"{url} has no integrity hash"
+    version = re.search(r"three@(\d+\.\d+\.\d+)/", imap["imports"]["three"]).group(1)
+    csp = re.search(r'Content-Security-Policy" content="([^"]+)"', html).group(1)
+    script_src = re.search(r"script-src ([^;]+)", csp).group(1).split()
+    cdn = [s for s in script_src if s.startswith("https://")]
+    assert cdn == [f"https://unpkg.com/three@{version}/"], cdn
+
+
 def test_frontend_has_no_inline_handlers_or_innerhtml():
     js = (STATIC / "app.js").read_text()
     html = (STATIC / "index.html").read_text()
@@ -135,3 +161,121 @@ def test_dpad_has_nine_labelled_controls():
     js = (STATIC / "app.js").read_text()
     for k in ("up", "down", "left", "right", "rotl", "rotr", "in", "out", "home"):
         assert f"'{k}'" in js, f"key action {k} has no handler"
+
+
+
+# ---- Review 2: packaging, sampler resilience, methods, payload ---------------------------
+
+def test_wheel_ships_every_allowlisted_static_file(tmp_path):
+    """Staff R6 (SDET): package-data only matched `static/*.html`, so a clean wheel shipped
+    index.html without app.js/app.css and served a blank page to anyone who `pip install`ed
+    it. Two things masked it: CI installs with `-e` (reads the source tree), and a stale
+    in-tree `build/lib/` from any earlier build is copied into the next wheel wholesale.
+    So build from a copy WITHOUT build/ or egg-info and look inside the wheel."""
+    import shutil
+    import subprocess
+    import sys
+    import zipfile
+
+    from proccity.server import STATIC_FILES
+
+    root = STATIC.parent.parent
+    src = tmp_path / "src"
+    shutil.copytree(root, src, ignore=shutil.ignore_patterns(
+        ".git", ".venv", "build", "dist", "*.egg-info", "__pycache__", ".ruff_cache", "docs"))
+    out = tmp_path / "whl"
+    subprocess.run([sys.executable, "-m", "pip", "wheel", "--no-deps", "-q", "-w", str(out),
+                    str(src)], check=True, capture_output=True)
+    names = set(zipfile.ZipFile(next(out.glob("proccity-*.whl"))).namelist())
+    for fname, _ in STATIC_FILES.values():
+        assert f"proccity/static/{fname}" in names, f"{fname} missing from wheel"
+
+
+def test_sampler_survives_a_failing_sample_and_keeps_last_snapshot(monkeypatch):
+    """Staff R3 (left untested in review 1): one psutil hiccup must not kill the only sampler
+    thread or blank the city. Inject the fault, run one loop iteration, check the snapshot."""
+    import proccity.server as srv
+
+    city = City(interval=0.01, start=False)
+    city.tick()
+    before = city.snapshot_bytes()
+
+    def broken():
+        raise RuntimeError("psutil sneezed")
+
+    monkeypatch.setattr(srv, "sample", broken)
+    city._safe_tick()                                   # what the loop calls; must not raise
+    assert city.snapshot_bytes() == before              # last good snapshot kept, not blanked
+
+    # and the real loop keeps going after a failure: run it for a few ticks then stop it
+    t = threading.Thread(target=city._loop, daemon=True)
+    t.start()
+    threading.Event().wait(0.05)
+    assert t.is_alive(), "loop died after a failing sample"
+    city.stop()
+    t.join(timeout=2)
+    assert not t.is_alive(), "stop() did not end the loop"
+
+
+def test_unsupported_methods_get_405_not_501_and_head_has_no_body(server):
+    """Network N3: http.server answers an unknown verb with 501 and a Python-flavoured HTML
+    page. A loopback tool should say 405 with Allow: GET, and HEAD must mirror GET headers."""
+    c = http.client.HTTPConnection("127.0.0.1", server, timeout=5)
+    c.request("POST", "/api/snapshot", body=b"{}", headers={"Host": "127.0.0.1"})
+    r = c.getresponse()
+    r.read()
+    assert r.status == 405 and r.getheader("Allow") == "GET, HEAD"
+    c = http.client.HTTPConnection("127.0.0.1", server, timeout=5)
+    c.request("HEAD", "/api/snapshot", headers={"Host": "127.0.0.1"})
+    r = c.getresponse()
+    body = r.read()
+    assert r.status == 200 and body == b"" and r.getheader("Content-Type") == "application/json"
+    assert int(r.getheader("Content-Length")) > 2
+
+
+def test_snapshot_floats_are_rounded_on_the_wire(server):
+    """Network N2: no 17.400000000000002 in an 80 KB payload sent every two seconds."""
+    _, _, body = get(server, "/api/snapshot", host="127.0.0.1")
+    assert not re.search(rb"\d\.\d{4,}", body), "unrounded float on the wire"
+
+
+def test_connection_is_reused_across_polls(server):
+    """Network N4: HTTP/1.0 closed the socket after every response, so the browser opened a new
+    TCP connection every two seconds. With Content-Length on every reply, keep-alive is safe."""
+    c = http.client.HTTPConnection("127.0.0.1", server, timeout=5)
+    for _ in range(3):                                   # would raise on a closed socket
+        c.request("GET", "/api/snapshot", headers={"Host": "127.0.0.1"})
+        r = c.getresponse()
+        r.read()
+        assert r.status == 200 and r.version == 11
+        assert r.getheader("Connection", "").lower() != "close"
+    c.close()
+
+
+def test_snapshot_carries_interval_and_real_memory_numbers(server):
+    """Product P4 / Network N5: the HUD summed RSS ("rent 7.3 GiB"), which double-counts shared
+    pages and can exceed physical RAM; and the client polled every 2 s regardless of
+    --interval. The snapshot now says what the machine really has and how often to ask."""
+    _, _, body = get(server, "/api/snapshot", host="127.0.0.1")
+    snap = json.loads(body)
+    assert snap["interval"] == 60
+    assert snap["mem_total"] > snap["mem_used"] > 0
+    assert sum(b["rss"] for b in snap["buildings"]) > 0
+
+
+def test_error_pages_are_plain_text_without_python_branding(server):
+    c = http.client.HTTPConnection("127.0.0.1", server, timeout=5)
+    c.putrequest("BREW", "/api/snapshot", skip_host=True)
+    c.putheader("Host", "127.0.0.1")
+    c.endheaders()
+    r = c.getresponse()
+    body = r.read()
+    assert r.status == 501
+    assert r.getheader("Content-Type", "").startswith("text/plain")
+    assert b"<html" not in body.lower() and b"python" not in body.lower()
+
+
+def test_ci_requires_the_browser_smoke_test():
+    """SDET: a skip in CI is a silent hole. The workflow must set the REQUIRE flag."""
+    ci = (STATIC.parent.parent / ".github" / "workflows" / "ci.yml").read_text()
+    assert 'PROCCITY_REQUIRE_BROWSER: "1"' in ci
