@@ -62,7 +62,9 @@ class City:
         self.interval = interval
         self.state = CityState()
         self._lock = threading.Lock()
-        self._snapshot: dict = {"t": 0.0, "cores": psutil.cpu_count() or 1, "buildings": []}
+        self._stop = threading.Event()
+        self._snapshot: dict = {"t": 0.0, "interval": interval, "cores": psutil.cpu_count() or 1,
+                                "mem_total": 0, "mem_used": 0, "buildings": []}
         if start:
             self.tick()  # first paint immediately; cpu reads 0 until the second sample
             threading.Thread(target=self._loop, daemon=True, name="proccity-sampler").start()
@@ -70,21 +72,32 @@ class City:
     def tick(self) -> None:
         procs = sample()
         buildings = layout(procs, self.state)
+        vm = psutil.virtual_memory()
         snap = {
-            "t": time.time(),
+            "t": round(time.time(), 3),
+            "interval": self.interval,
             "cores": psutil.cpu_count() or 1,
+            # real machine numbers for the HUD: summing RSS double-counts shared pages and
+            # can exceed physical RAM, which makes "rent" a lie
+            "mem_total": vm.total,
+            "mem_used": vm.total - vm.available,
             "buildings": [b.__dict__ for b in buildings],
         }
         with self._lock:
             self._snapshot = snap
 
+    def _safe_tick(self) -> None:
+        try:
+            self.tick()
+        except Exception:  # a sampler hiccup must not kill the only sampler thread
+            log.exception("sample failed; keeping last snapshot")
+
     def _loop(self) -> None:
-        while True:
-            time.sleep(self.interval)
-            try:
-                self.tick()
-            except Exception:  # a sampler hiccup must not kill the only sampler thread
-                log.exception("sample failed; keeping last snapshot")
+        while not self._stop.wait(self.interval):
+            self._safe_tick()
+
+    def stop(self) -> None:
+        self._stop.set()
 
     def snapshot_bytes(self) -> bytes:
         with self._lock:
@@ -112,22 +125,44 @@ def make_handler(city: City):
     class Handler(BaseHTTPRequestHandler):
         server_version = "proccity"
         sys_version = ""
+        # Every response carries Content-Length, so keep-alive is safe and the browser stops
+        # opening a fresh TCP connection for each 2-second poll.
+        protocol_version = "HTTP/1.1"
+        # http.server's default error page is HTML that names Python; keep it plain.
+        error_message_format = "%(code)d %(message)s\n"
+        error_content_type = "text/plain; charset=utf-8"
 
         def do_GET(self) -> None:  # noqa: N802 (http.server API)
+            self._serve(head=False)
+
+        def do_HEAD(self) -> None:  # noqa: N802
+            self._serve(head=True)
+
+        def _method_not_allowed(self) -> None:
+            self.send_response(405)
+            self.send_header("Allow", "GET, HEAD")
+            self._finish(b"method not allowed\n", "text/plain")
+
+        do_POST = do_PUT = do_DELETE = do_PATCH = do_OPTIONS = _method_not_allowed  # noqa: N815
+
+        def _serve(self, head: bool) -> None:
             if not host_is_loopback(self.headers.get("Host")):
-                self._send(421, "text/plain", b"proccity only answers to loopback hosts\n")
+                self._send(421, "text/plain", b"proccity only answers to loopback hosts\n", head)
                 return
             path = self.path.split("?", 1)[0]
             if path == "/api/snapshot":
-                self._send(200, "application/json", city.snapshot_bytes())
+                self._send(200, "application/json", city.snapshot_bytes(), head)
             elif path in STATIC_FILES:
                 name, ctype = STATIC_FILES[path]
-                self._send(200, ctype, (STATIC / name).read_bytes())
+                self._send(200, ctype, (STATIC / name).read_bytes(), head)
             else:
-                self._send(404, "text/plain", b"not found\n")
+                self._send(404, "text/plain", b"not found\n", head)
 
-        def _send(self, code: int, ctype: str, body: bytes) -> None:
+        def _send(self, code: int, ctype: str, body: bytes, head: bool = False) -> None:
             self.send_response(code)
+            self._finish(body, ctype, head)
+
+        def _finish(self, body: bytes, ctype: str, head: bool = False) -> None:
             self.send_header("Content-Type", ctype)
             self.send_header("Content-Length", str(len(body)))
             self.send_header("Cache-Control", "no-store")
@@ -135,7 +170,8 @@ def make_handler(city: City):
             self.send_header("Referrer-Policy", "no-referrer")
             self.send_header("X-Frame-Options", "DENY")
             self.end_headers()
-            self.wfile.write(body)
+            if not head:
+                self.wfile.write(body)
 
         def log_message(self, fmt: str, *args: object) -> None:
             log.debug(fmt, *args)
@@ -175,6 +211,7 @@ def main(argv: list[str] | None = None) -> None:
     except KeyboardInterrupt:
         pass
     finally:
+        city.stop()
         srv.server_close()
 
 

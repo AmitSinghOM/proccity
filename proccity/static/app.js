@@ -178,17 +178,22 @@ async function poll() {
       controls.target.set(cx, 0, cz); camera.position.set(cx + 38, 34, cz + 38); centered = true;
       homeTarget = new THREE.Vector3(cx, 0, cz);
     }
-    const totalRss = snap.buildings.reduce((a, b) => a + b.rss, 0);
     const hot = snap.buildings.filter(b => b.cpu >= 50).length;
+    // real machine memory, not a sum of RSS (which double-counts shared pages)
+    const pct = snap.mem_total ? Math.round(100 * snap.mem_used / snap.mem_total) : null;
     status.replaceChildren('🏙️ population ', bold(snap.buildings.length), ' · rent ',
-      bold((totalRss / 2 ** 30).toFixed(1) + ' GiB'), ' · ', String(snap.cores), ' lanes · ',
+      bold(pct === null ? '?' : pct + '%'), ' of ', (snap.mem_total / 2 ** 30).toFixed(0), ' GiB · ',
+      String(snap.cores), ' lanes · ',
       bold(hot), hot === 1 ? ' building on fire' : ' buildings on fire');
     renderTop(topcpu, [...snap.buildings].sort((a, b) => b.cpu - a.cpu).slice(0, 5), b => b.cpu.toFixed(0) + '%');
     renderTop(topmem, [...snap.buildings].sort((a, b) => b.rss - a.rss).slice(0, 5), b => fmtMiB(b.rss));
+    // poll at the server's own cadence: asking faster returns the same bytes, slower misses samples
+    const want = Math.max(500, Math.round((snap.interval || 2) * 1000));
+    if (want !== pollMs) { pollMs = want; clearInterval(pollTimer); pollTimer = setInterval(poll, pollMs); }
   } catch (err) { status.textContent = '🏙️ city hall is not answering (server unreachable)'; }
 }
 function bold(t) { const b = document.createElement('b'); b.textContent = String(t); return b; }
-setInterval(poll, 2000); poll();
+let pollMs = 2000, pollTimer = setInterval(poll, pollMs); poll();
 
 q.addEventListener('input', () => { needle = q.value.trim().toLowerCase(); for (const e of buildings.values()) restyle(e); });
 
@@ -241,12 +246,14 @@ function walk(dt) {
   }
 }
 
-// hover
+// hover (and tap: touch never fires pointermove before a tap, so a tap sets the ray too)
 const ray = new THREE.Raycaster(); const mouse = new THREE.Vector2(-2, -2); let px = 0, py = 0;
-addEventListener('pointermove', ev => {
+function aim(ev) {
   px = ev.clientX; py = ev.clientY;
   mouse.set((px / innerWidth) * 2 - 1, -(py / innerHeight) * 2 + 1);
-});
+}
+addEventListener('pointermove', aim);
+renderer.domElement.addEventListener('pointerdown', aim);
 function placeTip() {
   const w = tip.offsetWidth, h = tip.offsetHeight;
   tip.style.left = (px + 14 + w > innerWidth ? px - 14 - w : px + 14) + 'px';

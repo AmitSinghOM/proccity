@@ -21,7 +21,7 @@ proccity = "proccity.server:main"
 packages = ["proccity"]
 
 [tool.setuptools.package-data]
-proccity = ["static/*.html"]
+proccity = ["static/*.html", "static/*.js", "static/*.css"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -33,4 +33,4 @@ target-version = "py310"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP", "S"]
-per-file-ignores = { "tests/*" = ["S101", "S104"] }
+per-file-ignores = { "tests/*" = ["S101", "S104", "S603"] }
