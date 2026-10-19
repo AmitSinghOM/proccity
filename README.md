@@ -12,6 +12,8 @@ your system changes: new processes rise out of the ground, dead ones sink, busy 
 - **District** = a top-level process and its descendants (a browser and its helpers, a shell
   and what it spawned). Loner processes are pooled into shared "commons" blocks so a typical
   400-process macOS/Linux table is a dense city, not a suburb.
+- **Grey** = unseen. A building whose family owns no visible window fades toward concrete.
+  What keeps its colour is what you are actually looking at.
 
 Streets are stable: a process keeps its lot for life, a released lot goes to the next
 newcomer, and a family's block is released when the family is gone. Type in the search box
@@ -50,12 +52,54 @@ an unsolicited opinion.
   `wait()`. Find the parent (same block), have a word with its developer.
 - **Impress exactly no one at a party** but yourself, at 3 am, watching your machine breathe.
 
+## The report: what is working while you are not looking
+
+The city is the picture; `/report.md` is the list. Every process lands in exactly one of
+three buckets:
+
+| Bucket | Meaning |
+| --- | --- |
+| **On screen** | It, or an ancestor, owns a visible window. A browser's helpers count as on screen because the browser is: you are driving that work. |
+| **Unseen & busy** | No window, and right now it is burning CPU (≥ 5 %), moving bytes (≥ 50 KiB/s) or holding ≥ 1 GiB. This is the list worth reading. |
+| **Unseen & idle** | No window, nothing much happening. Counted, top 15 by memory listed. |
+
+Each row shows cpu, memory, network rate and a *kind* — `user`, `system` or `security` — from
+a short list of well-known names (launchd, mDNSResponder, the sync daemons, the usual endpoint
+agents). The kind is a label for the reader, not a verdict. The report deliberately never says
+"dangerous": on a managed Mac the top unseen talkers are routinely the security agent, the
+sync daemon and mDNSResponder, all legitimate, and a tool that flagged them would be wrong far
+more often than right. It tells you what is unseen and busy. You decide.
+
+```bash
+curl http://127.0.0.1:8765/report.md     # Markdown, paste it anywhere
+curl http://127.0.0.1:8765/report.json   # same data, machine-readable
+```
+
+Where the numbers come from, and what proccity does to get them:
+
+- **Network rate** — Apple's `/usr/bin/nettop`, per process, no root needed. Two samples,
+  difference over elapsed time. Not available on Linux: rates read 0 and the city still
+  paints.
+- **On screen** — `/usr/bin/lsappinfo front` for the frontmost app (always), and the Quartz
+  window list for every app with a visible window (with the optional `mac` extra below).
+  Window *titles* need Screen Recording permission and are never requested; owner pids and
+  on-screen state need nothing.
+- **Permissions** (camera, microphone, files) — not reported. macOS keeps those in TCC.db,
+  which is unreadable without Full Disk Access, and proccity will not ask for that.
+
 ## Run
 
 ```bash
 python3 -m venv .venv && .venv/bin/pip install -e .
 .venv/bin/proccity            # or: .venv/bin/python -m proccity
 # open http://127.0.0.1:8765/
+```
+
+On macOS, add the `mac` extra so the on-screen set covers every visible window rather than
+only the frontmost app:
+
+```bash
+.venv/bin/pip install -e '.[mac]'      # pyobjc-framework-Quartz, pinned
 ```
 
 Flags: `--port` (default 8765), `--interval` seconds between samples (default 2), `-v`.
@@ -67,7 +111,8 @@ The snapshot exposes process names, users and memory for this machine, so:
 - The server binds `127.0.0.1` only and has no auth: anything that can reach it is already
   on your machine. Do not put it behind a port-forward.
 - Requests whose `Host` header is not loopback get `421`. That defeats DNS rebinding, the one
-  way a web page you visit could otherwise read a loopback service as same-origin.
+  way a web page you visit could otherwise read a loopback service as same-origin. The report
+  endpoints sit behind the same guard and carry the same headers.
 - Static files are served from an allowlist of four paths, not a directory.
 - The page ships a Content-Security-Policy (no inline script, no eval) whose `script-src`
   allows only the pinned `three@<version>/` path on the CDN, and the Three.js import map is
@@ -76,6 +121,19 @@ The snapshot exposes process names, users and memory for this machine, so:
 - Only `GET` and `HEAD` are served; other verbs get `405`, and error pages are plain text.
 - Response headers: `Cache-Control: no-store`, `X-Content-Type-Options: nosniff`,
   `X-Frame-Options: DENY`, `Referrer-Policy: no-referrer`.
+- **Two subprocesses, on a leash.** proccity runs exactly two external commands,
+  `/usr/bin/nettop` and `/usr/bin/lsappinfo`, both Apple-shipped. Each is called by absolute
+  path with a literal argument list, a timeout and no shell; nothing from the user, the
+  network or a process name ever reaches a command line. The one value that is fed back into a
+  second command (the frontmost app's ASN from `lsappinfo front`) must match a strict
+  `ASN:0x…-0x…:` pattern first, or it is dropped. Their output is parsed by pure functions
+  with fixture tests. If either tool is missing or slow the result is empty, logged once, and
+  the city keeps running. `nettop` is asked for per-process byte counts only (`-P`), never
+  for remote addresses.
+- **What the report does not contain:** command lines, environment variables, working
+  directories, executable paths, window titles, remote addresses. Rows carry pid, parent pid,
+  name, user, cpu, memory, rate, threads, status, kind and the reason it was called busy — the
+  same fields the snapshot already exposes, plus two numbers.
 
 The frontend loads Three.js from unpkg, so the page needs internet on first load. Vendoring
 it would remove that dependency; see the review notes for why it is not done yet.
@@ -102,10 +160,21 @@ without a Chrome binary locally; CI sets `PROCCITY_REQUIRE_BROWSER=1` so a missi
 there is a failure, not a silent skip. The harness first proves it can see a `console.error`
 at all, so a clean console means something.
 
+`tests/test_report.py` drives the three buckets over synthetic snapshots: every process lands
+in exactly one bucket, helpers of an on-screen app are on screen, thresholds are inclusive,
+busy rows say why, idle rows are capped, pipes are escaped, and the JSON shape is fixed.
+`tests/test_netio_focus.py` parses captured `nettop` and `lsappinfo` output from fixtures,
+checks rate-from-deltas (first sample 0, reused pid ignored, no divide by zero), and proves
+both helpers degrade to empty — and never run at all when disabled — on a missing tool, a
+timeout or a bad exit. `tests/test_leakage.py` is the stress and no-leak pass: a hundred
+concurrent report fetches during live sampling, a thousand sampler ticks with no growth in the
+samplers' state, and a report rendered over hostile process names asserting that no command
+line, environment variable, path, title or address can appear in either report format.
+
 Review records: [docs/REVIEW-2026-09-29.md](docs/REVIEW-2026-09-29.md) (pass 1, five seats)
 and [docs/REVIEW-2026-09-29-pass-2.md](docs/REVIEW-2026-09-29-pass-2.md) (pass 2, six seats).
 
 ## Built for fun
 
-A weekend toy inspired by a reel. Not a monitoring tool; use `htop`, `btop`, or your APM for
-that. MIT.
+A weekend toy inspired by a reel. It shows you what is running unseen; it does not judge it.
+For alerts, history and verdicts use `htop`, `btop`, Activity Monitor, or your APM. MIT.

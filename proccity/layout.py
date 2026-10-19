@@ -35,6 +35,8 @@ class Proc:
     rss: int            # bytes
     threads: int
     status: str
+    net_rate: float = 0.0   # bytes per second, in + out; 0 where the platform has no source
+    on_screen: bool = False  # it, or an ancestor, owns a visible window
 
 
 @dataclass
@@ -51,6 +53,8 @@ class Building:
     rss: int
     threads: int
     status: str
+    net_rate: float = 0.0
+    on_screen: bool = False
 
 
 @dataclass
@@ -211,5 +215,6 @@ def layout(procs: list[Proc], state: CityState) -> list[Building]:
                 x=round(ox + lx * LOT, 3), z=round(oz + lz * LOT, 3),
                 width=round(width_for(p.threads), 3), height=round(height_for(p.rss), 3),
                 cpu=round(p.cpu, 1), rss=p.rss, threads=p.threads, status=p.status,
+                net_rate=round(p.net_rate, 1), on_screen=p.on_screen,
             ))
     return out
