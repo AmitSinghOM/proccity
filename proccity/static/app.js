@@ -7,8 +7,8 @@ const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
 
 // ---- a cartoon afternoon ---------------------------------------------------------------
 const scene = new THREE.Scene();
-scene.background = new THREE.Color(0x9edcff);
-scene.fog = new THREE.FogExp2(0xbfe9ff, 0.006);
+scene.background = new THREE.Color(0xcfeaff);
+scene.fog = new THREE.FogExp2(0xdcf0ff, 0.006);
 const camera = new THREE.PerspectiveCamera(50, innerWidth / innerHeight, 0.1, 800);
 camera.position.set(38, 34, 38);
 const renderer = new THREE.WebGLRenderer({ canvas: $('city'), antialias: true });
@@ -26,7 +26,7 @@ toonSteps.minFilter = toonSteps.magFilter = THREE.NearestFilter; toonSteps.needs
 const toon = (color, extra = {}) => new THREE.MeshToonMaterial({ color, gradientMap: toonSteps, ...extra });
 
 // grass, with a lazy sun and a few clouds that are just spheres in a trench coat
-const ground = new THREE.Mesh(new THREE.PlaneGeometry(1200, 1200), toon(0x7ccf7a));
+const ground = new THREE.Mesh(new THREE.PlaneGeometry(1200, 1200), toon(0xa9dfa5));
 ground.rotation.x = -Math.PI / 2; ground.position.y = -0.02; scene.add(ground);
 const sun = new THREE.Mesh(new THREE.SphereGeometry(9, 24, 16), new THREE.MeshBasicMaterial({ color: 0xffe066 }));
 sun.position.set(-160, 120, -220); scene.add(sun);
@@ -49,19 +49,24 @@ function hueFor(user) {
 }
 // every neighbourhood (district) gets its own pastel; a laptop has one user, so colouring by
 // user would paint the whole town one shade. The roof carries the user instead.
+// Idle buildings are light and soft so the eye is free; CPU pulls a building toward a deep,
+// saturated red the harder it works, so the hot ones are the dark ones in a pale town.
 const GOLDEN = 0.61803398875;
+const HOT = new THREE.Color(0x8b1a1a);            // what a building looks like at one full core
 function bodyColor(b) {
-  if (b.status === 'zombie') return new THREE.Color(0x8fd18b);
-  if (b.status === 'stopped') return new THREE.Color(0xb0b0b0);
-  return new THREE.Color().setHSL((b.district * GOLDEN) % 1, 0.6, 0.66);
+  if (b.status === 'zombie') return new THREE.Color(0xa8dfa4);
+  if (b.status === 'stopped') return new THREE.Color(0xcfcfcf);
+  return new THREE.Color().setHSL((b.district * GOLDEN) % 1, 0.45, 0.80);
 }
-function roofColor(b) { return new THREE.Color().setHSL(hueFor(b.user), 0.7, 0.42); }
+function roofColor(b) { return new THREE.Color().setHSL(hueFor(b.user), 0.55, 0.55); }
+// 0 at <=5% cpu, 1 at a full core; eased so 20-30% already reads as "warm", not "faint"
+function heat(cpu) { const t = Math.min(1, Math.max(0, (cpu - 5) / 95)); return Math.sqrt(t); }
 
 // ---- geometry shared by every building ---------------------------------------------------
 const box = new THREE.BoxGeometry(1, 1, 1); box.translate(0, 0.5, 0);           // grows from the ground
 const boxEdges = new THREE.EdgesGeometry(box);
 const roofGeo = new THREE.ConeGeometry(0.78, 0.5, 4); roofGeo.rotateY(Math.PI / 4); roofGeo.translate(0, 0.25, 0);
-const outlineMat = new THREE.LineBasicMaterial({ color: 0x24233a });
+const outlineMat = new THREE.LineBasicMaterial({ color: 0x4a4960 });
 
 const buildings = new Map();   // pid -> { body, roof, target:{w,h}, data, dying, wobble }
 const plates = new Map();      // district -> mesh
@@ -71,16 +76,18 @@ function matches(b) { return needle && b.name.toLowerCase().includes(needle); }
 
 function restyle(e) {
   const b = e.data, m = e.body.material;
-  const glow = Math.min(1, b.cpu / 100);          // one full core lights the windows fully
+  const h = heat(b.cpu);                          // 0 idle .. 1 one full core
   const dim = needle && !matches(b);
   // Unseen work (no visible window, and nothing it descends from has one) fades toward
   // concrete grey. On-screen apps keep their neighbourhood colour: those are the user's.
   const unseen = b.on_screen === false && !needle;
-  m.color.copy(bodyColor(b)); if (dim) m.color.lerp(new THREE.Color(0x9edcff), 0.7);
-  if (unseen) m.color.lerp(new THREE.Color(0xb9b6b0), 0.55);
-  m.emissive.setHSL(matches(b) ? 0.58 : 0.08, 1, dim ? 0 : 0.35 * glow);
-  e.roof.material.color.copy(roofColor(b)); if (dim) e.roof.material.color.lerp(new THREE.Color(0x9edcff), 0.7);
-  if (unseen) e.roof.material.color.lerp(new THREE.Color(0xb9b6b0), 0.4);
+  m.color.copy(bodyColor(b)); if (dim) m.color.lerp(new THREE.Color(0xd6eefc), 0.7);
+  if (unseen) m.color.lerp(new THREE.Color(0xd0cdc7), 0.5);
+  if (!dim) m.color.lerp(HOT, 0.85 * h);          // the hungry get dark red, unseen or not
+  m.emissive.setHSL(matches(b) ? 0.58 : 0.02, 1, dim ? 0 : 0.25 * h);
+  e.roof.material.color.copy(roofColor(b)); if (dim) e.roof.material.color.lerp(new THREE.Color(0xd6eefc), 0.7);
+  if (unseen) e.roof.material.color.lerp(new THREE.Color(0xd0cdc7), 0.4);
+  if (!dim) e.roof.material.color.lerp(HOT, 0.7 * h);
   e.wobble = b.cpu > 60 ? Math.min(1, (b.cpu - 60) / 100) : 0;
 }
 
@@ -110,7 +117,7 @@ function replate(list) {
   }
   for (const [d, x] of ext) {
     let p = plates.get(d);
-    if (!p) { p = new THREE.Mesh(new THREE.BoxGeometry(1, 0.12, 1), toon(0x5c5f73)); scene.add(p); plates.set(d, p); }
+    if (!p) { p = new THREE.Mesh(new THREE.BoxGeometry(1, 0.12, 1), toon(0x9a9cab)); scene.add(p); plates.set(d, p); }
     p.position.set((x.x0 + x.x1) / 2, 0.06, (x.z0 + x.z1) / 2);
     p.scale.set(x.x1 - x.x0 + 1.9, 1, x.z1 - x.z0 + 1.9);
   }
