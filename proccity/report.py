@@ -67,6 +67,19 @@ class Row:
     status: str
     kind: str           # user | system | security
     why: tuple[str, ...] = ()   # what made it "busy"; empty for idle and on-screen rows
+    identity: str = "unknown"   # verified | unverified | unknown
+    signer: str = ""            # who signed it, when verified; what is wrong, when not
+    files: int | None = None    # open files, or None when the OS would not let us look
+    sockets: int | None = None  # inet sockets, or None
+    children: int = 0
+
+
+@dataclass(frozen=True)
+class Sources:
+    """How each signal was obtained, so a reader can tell 'measured 0' from 'not measured'."""
+    screen: str = "unknown"     # quartz | frontmost-only | win32 | x11 | unknown
+    net: str = "needs-admin"    # nettop | needs-admin | unavailable
+    identity: str = "unknown"   # codesign | unknown
 
 
 @dataclass
@@ -75,6 +88,7 @@ class Report:
     cores: int
     mem_total: int
     frontmost: Row | None
+    sources: Sources = field(default_factory=Sources)
     on_screen: list[Row] = field(default_factory=list)
     unseen_busy: list[Row] = field(default_factory=list)
     unseen_idle: list[Row] = field(default_factory=list)
@@ -82,12 +96,14 @@ class Report:
     @property
     def note(self) -> str:
         return ("This report shows what is running unseen. It does not judge it. Rows marked "
-                "system or security are well-known macOS or endpoint components.")
+                "system or security are well-known macOS or endpoint components. Identity "
+                "says who signed the running code, never whether it is safe.")
 
     def to_dict(self) -> dict:
         return {
             "t": self.t, "cores": self.cores, "mem_total": self.mem_total,
             "frontmost": asdict(self.frontmost) if self.frontmost else None,
+            "sources": asdict(self.sources),
             "totals": {"on_screen": len(self.on_screen), "unseen_busy": len(self.unseen_busy),
                        "unseen_idle": len(self.unseen_idle)},
             "on_screen": [asdict(r) for r in self.on_screen],
@@ -145,7 +161,8 @@ def busy_reasons(p: Proc) -> tuple[str, ...]:
 def _row(p: Proc, why: tuple[str, ...] = ()) -> Row:
     return Row(pid=p.pid, ppid=p.ppid, name=p.name, user=p.user, cpu=round(p.cpu, 1),
                rss=p.rss, net_rate=round(p.net_rate, 1), threads=p.threads, status=p.status,
-               kind=kind_of(p.name), why=why)
+               kind=kind_of(p.name), why=why, identity=p.identity, signer=p.signer,
+               files=p.files, sockets=p.sockets, children=p.children)
 
 
 def _activity(r: Row) -> float:
@@ -155,9 +172,11 @@ def _activity(r: Row) -> float:
 
 
 def build_report(procs: list[Proc], screen_pids: set[int], frontmost_pid: int | None,
-                 t: float, cores: int, mem_total: int) -> Report:
+                 t: float, cores: int, mem_total: int,
+                 sources: Sources | None = None) -> Report:
     on_screen_pids = expand_to_families(procs, screen_pids)
-    rep = Report(t=t, cores=cores, mem_total=mem_total, frontmost=None)
+    rep = Report(t=t, cores=cores, mem_total=mem_total, frontmost=None,
+                 sources=sources or Sources())
     for p in procs:
         if p.pid in on_screen_pids:
             rep.on_screen.append(_row(p))
@@ -189,38 +208,89 @@ def _md_escape(s: str) -> str:
     return s.replace("|", "\\|").replace("\n", " ")
 
 
-def _table(rows: list[Row], with_why: bool) -> list[str]:
-    head = "| process | pid | kind | cpu | mem | net |" + (" why |" if with_why else "")
-    rule = "|---|---:|---|---:|---:|---:|" + ("---|" if with_why else "")
+def _net_cell(r: Row, net_source: str) -> str:
+    if net_source == "needs-admin":
+        return "needs admin"
+    if net_source == "unavailable":
+        return "n/a"
+    return fmt_rate(r.net_rate)
+
+
+def _id_cell(r: Row) -> str:
+    if r.identity in ("verified", "unverified"):
+        return f"{r.identity} ({_md_escape(r.signer)})" if r.signer else r.identity
+    return "unknown"
+
+
+def _n(v: int | None) -> str:
+    return "–" if v is None else str(v)
+
+
+def _table(rows: list[Row], with_why: bool, net_source: str) -> list[str]:
+    head = "| process | pid | kind | identity | cpu | mem | net | files | sockets | children |"
+    rule = "|---|---:|---|---|---:|---:|---:|---:|---:|---:|"
+    if with_why:
+        head += " why |"
+        rule += "---|"
     out = [head, rule]
     for r in rows:
-        line = (f"| {_md_escape(r.name)} | {r.pid} | {r.kind} | {r.cpu:.0f}% | "
-                f"{fmt_bytes(r.rss)} | {fmt_rate(r.net_rate)} |")
+        line = (f"| {_md_escape(r.name)} | {r.pid} | {r.kind} | {_id_cell(r)} | {r.cpu:.0f}% | "
+                f"{fmt_bytes(r.rss)} | {_net_cell(r, net_source)} | {_n(r.files)} | "
+                f"{_n(r.sockets)} | {r.children} |")
         if with_why:
             line += f" {', '.join(r.why)} |"
         out.append(line)
     return out
 
 
+_SCREEN_TEXT = {
+    "quartz": "On-screen set: every visible window (Quartz).",
+    "frontmost-only": "On-screen set: the frontmost app only (install `proccity[mac]` for "
+                      "every window).",
+    "win32": "On-screen set: every visible top-level window (Win32).",
+    "x11": "On-screen set: every mapped X11 client window.",
+    "unknown": "On-screen set: **unknown** on this session (Wayland or headless), so every "
+               "process is listed as unseen.",
+}
+_NET_TEXT = {
+    "nettop": "Network: per-process rate from nettop.",
+    "needs-admin": "Network: **not measured** -- this platform has no per-process counter "
+                   "without admin rights.",
+    "unavailable": "Network: nettop failed on this host; rates not available.",
+}
+_ID_TEXT = {
+    "codesign": "Identity: signature of the running code, checked a few processes per sample; "
+                "says who signed it, never whether it is safe.",
+    "unknown": "Identity: not checked on this platform.",
+}
+
+
 def render_markdown(rep: Report, when: str) -> str:
+    src = rep.sources
+    total = len(rep.on_screen) + len(rep.unseen_busy) + len(rep.unseen_idle)
     lines = [f"# proccity report — {when}", "",
-             f"{rep.cores} cores, {fmt_bytes(rep.mem_total)} memory, "
-             f"{len(rep.on_screen) + len(rep.unseen_busy) + len(rep.unseen_idle)} processes."]
+             f"{rep.cores} cores, {fmt_bytes(rep.mem_total)} memory, {total} processes."]
     if rep.frontmost:
         lines.append(f"Frontmost: **{_md_escape(rep.frontmost.name)}** (pid {rep.frontmost.pid})")
+    lines += ["", "What this report could measure here:", "",
+              f"- {_SCREEN_TEXT.get(src.screen, _SCREEN_TEXT['unknown'])}",
+              f"- {_NET_TEXT.get(src.net, _NET_TEXT['needs-admin'])}",
+              f"- {_ID_TEXT.get(src.identity, _ID_TEXT['unknown'])}",
+              "- Files, sockets, children are counts of what the process holds right now; "
+              "a dash means the OS would not let this user look."]
     lines += ["", f"## On screen ({len(rep.on_screen)})", ""]
-    lines += _table(rep.on_screen, with_why=False) if rep.on_screen else ["_nothing_"]
+    lines += _table(rep.on_screen, False, src.net) if rep.on_screen else ["_nothing_"]
     lines += ["", f"## Unseen & busy ({len(rep.unseen_busy)})", "",
               f"Busy means cpu ≥ {BUSY_CPU:.0f}%, net ≥ {fmt_rate(BUSY_NET)} "
               f"or mem ≥ {fmt_bytes(BUSY_RSS)}.", ""]
-    lines += _table(rep.unseen_busy, with_why=True) if rep.unseen_busy else ["_nothing_"]
+    lines += _table(rep.unseen_busy, True, src.net) if rep.unseen_busy else ["_nothing_"]
     idle = rep.unseen_idle
     lines += ["", f"## Unseen & idle ({len(idle)})", ""]
     if idle:
         shown = sorted(idle, key=lambda r: -r.rss)[:IDLE_ROWS]
         lines.append(f"Top {len(shown)} by memory; {len(idle) - len(shown)} more not listed.")
         lines.append("")
-        lines += _table(shown, with_why=False)
+        lines += _table(shown, False, src.net)
     else:
         lines.append("_nothing_")
     lines += ["", "---", "", rep.note, ""]

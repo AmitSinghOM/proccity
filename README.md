@@ -63,27 +63,69 @@ three buckets:
 | **Unseen & busy** | No window, and right now it is burning CPU (≥ 5 %), moving bytes (≥ 50 KiB/s) or holding ≥ 1 GiB. This is the list worth reading. |
 | **Unseen & idle** | No window, nothing much happening. Counted, top 15 by memory listed. |
 
-Each row shows cpu, memory, network rate and a *kind* — `user`, `system` or `security` — from
-a short list of well-known names (launchd, mDNSResponder, the sync daemons, the usual endpoint
-agents). The kind is a label for the reader, not a verdict. The report deliberately never says
-"dangerous": on a managed Mac the top unseen talkers are routinely the security agent, the
-sync daemon and mDNSResponder, all legitimate, and a tool that flagged them would be wrong far
-more often than right. It tells you what is unseen and busy. You decide.
+Each row shows cpu, memory, network rate, **identity**, how many files / sockets / children it
+holds, and a *kind* — `user`, `system` or `security` — from a short list of well-known names
+(launchd, mDNSResponder, the sync daemons, the usual endpoint agents). The kind is a label for
+the reader, not a verdict. The report deliberately never says "dangerous": on a managed Mac the
+top unseen talkers are routinely the security agent, the sync daemon and mDNSResponder, all
+legitimate, and a tool that flagged them would be wrong far more often than right. It tells you
+what is unseen and busy. You decide.
 
 ```bash
 curl http://127.0.0.1:8765/report.md     # Markdown, paste it anywhere
 curl http://127.0.0.1:8765/report.json   # same data, machine-readable
 ```
 
+### Identity: who signed the running code
+
+Three states, never "safe":
+
+| State | Meaning |
+| --- | --- |
+| **verified (Apple)** / **verified (TEAMID)** | the code in memory carries a valid signature from Apple or a Developer / App Store team |
+| **unverified (ad-hoc / unsigned / invalid)** | it runs, but nobody vouches for it: self-signed, no signature, or modified after signing |
+| **unknown** | not checked yet this run, process gone, or a platform with no check |
+
+macOS checks the *running process* with Apple's `codesign` (so a binary swapped on disk after
+launch does not fool it), a few processes per sample, unseen-and-busy ones first; the verdict
+is cached per process lifetime. Expect your own dev tools to show `ad-hoc` — that is true, and
+it is not an alarm. Windows (`WinVerifyTrust`) and Linux (package ownership) are not
+implemented yet and report `unknown`; a badge that can be fooled is worse than no badge.
+
+### Files, sockets, children
+
+Counts of what each process holds right now. Not *which* files or *which* peers — the report
+shows no paths and no addresses, by contract — just how much. A dash means the OS would not let
+this user look (other users' processes on macOS and Linux). Live tracing of what a process
+touches when is root on every OS, so proccity does not do it.
+
+### What works where
+
+| Signal | macOS | Windows | Linux X11 | Linux Wayland |
+| --- | --- | --- | --- | --- |
+| cpu, memory, threads, family | yes | yes | yes | yes |
+| on screen vs unseen | yes (`[mac]` extra for every window; frontmost app without it) | yes, no extra dependency | yes, via `/usr/bin/xprop` | **unknown** — no generic window list; everything listed as unseen |
+| network rate per process | yes, `nettop`, no root | **needs admin** (ETW) | **needs admin** (`CAP_NET_RAW`) | needs admin |
+| identity | yes, `codesign` | unknown (not yet) | unknown (not yet) | unknown |
+| files / sockets / children | yes | yes | yes | yes |
+
+Where a signal cannot be measured the report says so — `needs admin`, `unknown`, a dash —
+rather than printing a zero that looks like a measurement. Every report opens with a "What this
+report could measure here" list for exactly this reason.
+
 Where the numbers come from, and what proccity does to get them:
 
 - **Network rate** — Apple's `/usr/bin/nettop`, per process, no root needed. Two samples,
-  difference over elapsed time. Not available on Linux: rates read 0 and the city still
-  paints.
-- **On screen** — `/usr/bin/lsappinfo front` for the frontmost app (always), and the Quartz
-  window list for every app with a visible window (with the optional `mac` extra below).
-  Window *titles* need Screen Recording permission and are never requested; owner pids and
-  on-screen state need nothing.
+  difference over elapsed time. Linux and Windows have no per-process counter an ordinary user
+  may read, so the column reads `needs admin`.
+- **On screen** — macOS: `/usr/bin/lsappinfo front` for the frontmost app (always), and the
+  Quartz window list for every app with a visible window (with the optional `mac` extra).
+  Windows: `EnumWindows` / `IsWindowVisible` / `GetForegroundWindow` through `ctypes`, no
+  dependency; cloaked UWP shells are excluded. Linux X11: `_NET_CLIENT_LIST` and
+  `_NET_WM_PID` through `xprop`; minimised windows are not on screen. Window *titles* are never
+  requested on any platform.
+- **Identity** — `/usr/bin/codesign --verify <pid>` then `codesign -dv <pid>`; the parser
+  keeps the signer fields and discards the executable path.
 - **Permissions** (camera, microphone, files) — not reported. macOS keeps those in TCC.db,
   which is unreadable without Full Disk Access, and proccity will not ask for that.
 
@@ -121,19 +163,23 @@ The snapshot exposes process names, users and memory for this machine, so:
 - Only `GET` and `HEAD` are served; other verbs get `405`, and error pages are plain text.
 - Response headers: `Cache-Control: no-store`, `X-Content-Type-Options: nosniff`,
   `X-Frame-Options: DENY`, `Referrer-Policy: no-referrer`.
-- **Two subprocesses, on a leash.** proccity runs exactly two external commands,
-  `/usr/bin/nettop` and `/usr/bin/lsappinfo`, both Apple-shipped. Each is called by absolute
-  path with a literal argument list, a timeout and no shell; nothing from the user, the
-  network or a process name ever reaches a command line. The one value that is fed back into a
-  second command (the frontmost app's ASN from `lsappinfo front`) must match a strict
-  `ASN:0x…-0x…:` pattern first, or it is dropped. Their output is parsed by pure functions
-  with fixture tests. If either tool is missing or slow the result is empty, logged once, and
-  the city keeps running. `nettop` is asked for per-process byte counts only (`-P`), never
-  for remote addresses.
+- **Subprocesses, on a leash.** proccity runs a fixed set of external commands and nothing
+  else: `/usr/bin/nettop`, `/usr/bin/lsappinfo` and `/usr/bin/codesign` on macOS (all
+  Apple-shipped), `/usr/bin/xprop` on Linux X11. Each is called by absolute path with a literal
+  argument list, a timeout and no shell; nothing from the user, the network or a process name
+  ever reaches a command line. The values that are fed back into a second command — the
+  frontmost app's ASN on macOS, an X11 window id, a pid for `codesign` — must match a strict
+  pattern (`ASN:0x…-0x…:`, `0x[0-9a-f]{1,16}`, a positive integer) first, or they are dropped.
+  Output is parsed by pure functions with fixture tests. If a tool is missing or slow the result
+  is empty, logged once, and the city keeps running. `nettop` is asked for per-process byte
+  counts only (`-P`), never for remote addresses; `codesign`'s executable-path line is parsed
+  out and discarded. Windows uses `ctypes` against `user32`/`dwmapi` and runs no subprocess.
 - **What the report does not contain:** command lines, environment variables, working
-  directories, executable paths, window titles, remote addresses. Rows carry pid, parent pid,
-  name, user, cpu, memory, rate, threads, status, kind and the reason it was called busy — the
-  same fields the snapshot already exposes, plus two numbers.
+  directories, executable paths, window titles, remote addresses, file names. Rows carry pid,
+  parent pid, name, user, cpu, memory, rate, threads, status, kind, the reason it was called
+  busy, an identity state with its signer (a Team ID or one of `Apple`, `ad-hoc`, `unsigned`,
+  `invalid`), and three counts. `tests/test_leakage.py` asserts every row key against that
+  allowlist and greps the live report for path, address and environment shapes.
 
 The frontend loads Three.js from unpkg, so the page needs internet on first load. Vendoring
 it would remove that dependency; see the review notes for why it is not done yet.
@@ -180,7 +226,14 @@ busy rows say why, idle rows are capped, pipes are escaped, and the JSON shape i
 `tests/test_netio_focus.py` parses captured `nettop` and `lsappinfo` output from fixtures,
 checks rate-from-deltas (first sample 0, reused pid ignored, no divide by zero), and proves
 both helpers degrade to empty — and never run at all when disabled — on a missing tool, a
-timeout or a bad exit. `tests/test_leakage.py` is the stress and no-leak pass: a hundred
+timeout or a bad exit. `tests/test_identity.py` classifies real `codesign` output for every state (Apple app, Apple
+platform daemon, Developer ID, ad-hoc, invalid, unsigned, gone) and checks the cache is keyed by
+process lifetime, the per-tick budget holds, and only a validated integer pid reaches argv.
+`tests/test_platforms.py` parses `xprop` output with injected ids, rejects anything that could
+smuggle an argument, drives the Win32 filter through a fake enumerator, and proves a Wayland
+session is reported `unknown` rather than guessed. Windows and Linux backends are tested at the
+parser and filter level only; they have not been run on a real Windows or X11 host yet.
+`tests/test_leakage.py` is the stress and no-leak pass: a hundred
 concurrent report fetches during live sampling, a thousand sampler ticks with no growth in the
 samplers' state, and a report rendered over hostile process names asserting that no command
 line, environment variable, path, title or address can appear in either report format.

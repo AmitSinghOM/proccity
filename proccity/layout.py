@@ -37,6 +37,12 @@ class Proc:
     status: str
     net_rate: float = 0.0   # bytes per second, in + out; 0 where the platform has no source
     on_screen: bool = False  # it, or an ancestor, owns a visible window
+    create_time: float = 0.0  # with pid, identifies one process lifetime (pids are reused)
+    identity: str = "unknown"   # verified | unverified | unknown  (see identity.py)
+    signer: str = ""            # "Apple", a Team ID, "ad-hoc", "unsigned", "invalid", or ""
+    files: int | None = None    # open files; None = not permitted to look
+    sockets: int | None = None  # inet sockets; None = not permitted to look
+    children: int = 0           # direct children
 
 
 @dataclass
@@ -55,6 +61,11 @@ class Building:
     status: str
     net_rate: float = 0.0
     on_screen: bool = False
+    identity: str = "unknown"
+    signer: str = ""
+    files: int | None = None
+    sockets: int | None = None
+    children: int = 0
 
 
 @dataclass
@@ -216,5 +227,7 @@ def layout(procs: list[Proc], state: CityState) -> list[Building]:
                 width=round(width_for(p.threads), 3), height=round(height_for(p.rss), 3),
                 cpu=round(p.cpu, 1), rss=p.rss, threads=p.threads, status=p.status,
                 net_rate=round(p.net_rate, 1), on_screen=p.on_screen,
+                identity=p.identity, signer=p.signer,
+                files=p.files, sockets=p.sockets, children=p.children,
             ))
     return out

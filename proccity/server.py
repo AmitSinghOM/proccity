@@ -17,16 +17,18 @@ import logging
 import sys
 import threading
 import time
-from dataclasses import replace
+from dataclasses import asdict, replace
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 import psutil
 
 from .focus import FocusSampler
+from .identity import IdentityChecker
+from .interact import count_all
 from .layout import CityState, Proc, layout
 from .netio import NetSampler
-from .report import Report, build_report, expand_to_families, render_markdown
+from .report import Report, Sources, build_report, expand_to_families, render_markdown
 
 log = logging.getLogger("proccity")
 STATIC = Path(__file__).parent / "static"
@@ -49,7 +51,7 @@ API = {
 def sample() -> list[Proc]:
     procs: list[Proc] = []
     for p in psutil.process_iter(["pid", "ppid", "name", "username", "memory_info",
-                                  "num_threads", "status"]):
+                                  "num_threads", "status", "create_time"]):
         info = p.info
         try:
             cpu = p.cpu_percent(interval=None)  # since last call; first call is 0.0
@@ -61,46 +63,78 @@ def sample() -> list[Proc]:
             name=info.get("name") or "?", user=info.get("username") or "?",
             cpu=cpu, rss=getattr(mem, "rss", 0) if mem else 0,
             threads=info.get("num_threads") or 1, status=info.get("status") or "?",
+            create_time=info.get("create_time") or 0.0,
         ))
     return procs
 
 
-def enrich(procs: list[Proc], net_rates: dict[int, float], screen_pids: set[int]) -> list[Proc]:
-    """Pure: stamp each Proc with its network rate and whether its family is on screen."""
+def enrich(procs: list[Proc], net_rates: dict[int, float], screen_pids: set[int],
+           identities: dict | None = None, counts: dict | None = None) -> list[Proc]:
+    """Pure: stamp each Proc with its network rate, on-screen family membership, identity
+    verdict and interaction counts. Missing maps leave the defaults in place."""
     visible = expand_to_families(procs, screen_pids)
-    return [replace(p, net_rate=net_rates.get(p.pid, 0.0), on_screen=p.pid in visible)
-            for p in procs]
+    identities = identities or {}
+    counts = counts or {}
+    out = []
+    for p in procs:
+        ident = identities.get(p.pid)
+        c = counts.get(p.pid)
+        out.append(replace(
+            p, net_rate=net_rates.get(p.pid, 0.0), on_screen=p.pid in visible,
+            identity=ident.state if ident else p.identity,
+            signer=ident.signer if ident else p.signer,
+            files=c.files if c else p.files, sockets=c.sockets if c else p.sockets,
+            children=c.children if c else p.children,
+        ))
+    return out
 
 
 class City:
     """Samples on a background thread so HTTP requests never block on psutil."""
 
     def __init__(self, interval: float, start: bool = True, net: NetSampler | None = None,
-                 focus: FocusSampler | None = None) -> None:
+                 focus: FocusSampler | None = None, identity: IdentityChecker | None = None,
+                 counts: bool = True) -> None:
         self.interval = interval
         self.state = CityState()
         self.net = net if net is not None else NetSampler()
         self.focus = focus if focus is not None else FocusSampler()
+        self.identity = identity if identity is not None else IdentityChecker()
+        self.counts = counts
         self._lock = threading.Lock()
         self._stop = threading.Event()
         self._snapshot: dict = {"t": 0.0, "interval": interval, "cores": psutil.cpu_count() or 1,
                                 "mem_total": 0, "mem_used": 0, "frontmost": None,
-                                "buildings": []}
+                                "sources": asdict(self._sources()), "buildings": []}
         self._report: Report | None = None
         if start:
             self.tick()  # first paint immediately; cpu reads 0 until the second sample
             threading.Thread(target=self._loop, daemon=True, name="proccity-sampler").start()
+
+    def _sources(self) -> Sources:
+        return Sources(screen=self.focus.source, net=self.net.source,
+                       identity=self.identity.source)
 
     def tick(self) -> None:
         procs = sample()
         net_rates = self.net.sample()
         screen_pids = self.focus.screen_pids()
         frontmost = self.focus.frontmost_pid() if screen_pids else None
-        procs = enrich(procs, net_rates, screen_pids)
+        visible = expand_to_families(procs, screen_pids)
+        # Identity is budgeted per tick: check the unseen and busy first, the user's own
+        # visible apps next, then everything else.
+        def priority(p: Proc) -> tuple:
+            busy = p.cpu >= 5 or net_rates.get(p.pid, 0.0) >= 50 * 1024 or p.rss >= (1 << 30)
+            return (0 if (busy and p.pid not in visible) else 1 if p.pid in visible else 2,
+                    -p.cpu, p.pid)
+        identities = self.identity.refresh(procs, priority)
+        counts = count_all({p.pid: p.ppid for p in procs}, enabled=self.counts)
+        procs = enrich(procs, net_rates, screen_pids, identities, counts)
         buildings = layout(procs, self.state)
         vm = psutil.virtual_memory()
         now = round(time.time(), 3)
         cores = psutil.cpu_count() or 1
+        sources = self._sources()
         snap = {
             "t": now,
             "interval": self.interval,
@@ -110,10 +144,11 @@ class City:
             "mem_total": vm.total,
             "mem_used": vm.total - vm.available,
             "frontmost": frontmost,
+            "sources": asdict(sources),
             "buildings": [b.__dict__ for b in buildings],
         }
         report = build_report(procs, screen_pids, frontmost, t=now, cores=cores,
-                              mem_total=vm.total)
+                              mem_total=vm.total, sources=sources)
         with self._lock:
             self._snapshot = snap
             self._report = report

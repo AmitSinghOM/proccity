@@ -59,10 +59,16 @@ def parse_nettop(text: str) -> dict[int, int]:
 
 
 class NetSampler:
-    """Turns successive cumulative byte counts into a per-pid rate in bytes/second."""
+    """Turns successive cumulative byte counts into a per-pid rate in bytes/second.
+
+    `source` tells the report how to read a 0: `nettop` = measured; `needs-admin` = this
+    platform has no unprivileged per-process counter (Linux needs CAP_NET_RAW, Windows needs
+    an admin ETW session), so nothing was measured; `unavailable` = macOS but nettop failed.
+    """
 
     def __init__(self, enabled: bool | None = None) -> None:
         self.enabled = sys.platform == "darwin" if enabled is None else enabled
+        self.source = "nettop" if self.enabled else "needs-admin"
         self._last: dict[int, int] = {}
         self._last_t: float | None = None
         self._failed = False
@@ -88,14 +94,17 @@ class NetSampler:
             proc = subprocess.run(NETTOP_ARGV, capture_output=True, text=True,  # noqa: S603
                                   timeout=TIMEOUT, check=False)
         except (OSError, subprocess.TimeoutExpired) as exc:
+            self.source = "unavailable"
             if not self._failed:        # say it once, not every two seconds
                 log.warning("nettop unavailable (%s); network rates will read 0", exc)
                 self._failed = True
             return {}
         if proc.returncode != 0:
+            self.source = "unavailable"
             if not self._failed:
                 log.warning("nettop exited %d; network rates will read 0", proc.returncode)
                 self._failed = True
             return {}
         self._failed = False
+        self.source = "nettop"
         return self.rates_from(parse_nettop(proc.stdout), time.monotonic())

@@ -141,12 +141,16 @@ function fmtMiB(rss) { return (rss / 2 ** 20).toFixed(0) + ' MiB'; }
 function fmtRate(bps) { return bps >= 2 ** 20 ? (bps / 2 ** 20).toFixed(1) + ' MiB/s' : (bps / 1024).toFixed(0) + ' KiB/s'; }
 function quip(b) {
   if (b.status === 'zombie') return '🧟 undead. waiting for a parent to notice.';
+  if (b.identity === 'unverified') return '🪪 ' + (b.signer === 'invalid' ? 'signature does not match its code.' : b.signer === 'unsigned' ? 'carries no signature at all.' : 'self-signed, no authority vouches for it.') + ' not a verdict, a fact.';
   if (b.cpu >= 100) return '🔥 burning more than one whole core.';
   if (b.net_rate >= 2 ** 20) return '📡 moving ' + fmtRate(b.net_rate) + (b.on_screen ? '.' : ' with no window open.');
   if (b.cpu >= 50) return '🏃 sweating.';
   if (b.rss >= 2 ** 30) return '🐘 owns more RAM than your first computer.';
   if (b.pid === mayorPid) return '👑 the Mayor. biggest landlord in town.';
   if (b.on_screen === false && b.cpu >= 5) return '🕵️ busy, and you cannot see it. check /report.md';
+  if (b.sockets >= 20) return '🔌 holding ' + b.sockets + ' sockets open.';
+  if (b.files >= 200) return '📂 holding ' + b.files + ' files open.';
+  if (b.children >= 10) return '👨‍👩‍👧‍👦 parent of ' + b.children + '.';
   if (b.status === 'sleeping' || b.status === 'idle') return '😴 zzz.';
   if (b.threads >= 64) return '🐙 more threads than a sweater.';
   return '🙂 minding its own business.';

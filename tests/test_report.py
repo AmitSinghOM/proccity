@@ -130,13 +130,13 @@ def test_kind_is_a_label_not_a_filter():
 def test_json_shape_is_stable_and_serialisable():
     rep = build_report(city(), {BROWSER}, BROWSER, t=1.5, cores=8, mem_total=16 << 30)
     d = json.loads(json.dumps(rep.to_dict()))
-    assert set(d) == {"t", "cores", "mem_total", "frontmost", "totals", "on_screen",
+    assert set(d) == {"t", "cores", "mem_total", "frontmost", "sources", "totals", "on_screen",
                       "unseen_busy", "unseen_idle", "thresholds", "note"}
     assert d["totals"] == {"on_screen": 3, "unseen_busy": 3, "unseen_idle": 1 + len(IDLE)}
     assert d["frontmost"]["pid"] == BROWSER
     row = d["unseen_busy"][0]
     assert {"pid", "ppid", "name", "user", "cpu", "rss", "net_rate", "threads", "status",
-            "kind", "why"} == set(row)
+            "kind", "why", "identity", "signer", "files", "sockets", "children"} == set(row)
 
 
 def test_markdown_has_three_sections_caps_idle_rows_and_escapes_pipes():
@@ -147,12 +147,12 @@ def test_markdown_has_three_sections_caps_idle_rows_and_escapes_pipes():
     for head in ("## On screen (3)", "## Unseen & busy (4)", f"## Unseen & idle ({1 + len(IDLE)})"):
         assert head in md
     assert "Frontmost: **firefox** (pid 100)" in md
-    assert "| weird\\|name | 900 | user | 50% |" in md
+    assert "| weird\\|name | 900 | user | unknown | 50% |" in md
     idle_section = md.split("## Unseen & idle")[1]
     hidden = 1 + len(IDLE) - IDLE_ROWS
     assert f"Top {IDLE_ROWS} by memory; {hidden} more not listed." in idle_section
     assert idle_section.count("\n| ") == IDLE_ROWS + 1   # header + capped rows
-    assert md.rstrip().endswith("endpoint components.")
+    assert md.rstrip().endswith("never whether it is safe.")
 
 
 def test_empty_buckets_render_nothing_markers():

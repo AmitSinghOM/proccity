@@ -28,7 +28,7 @@ from proccity.report import Row, build_report, render_markdown
 from proccity.server import City, enrich, make_handler
 
 ROW_FIELDS = {"pid", "ppid", "name", "user", "cpu", "rss", "net_rate", "threads", "status",
-              "kind", "why"}
+              "kind", "why", "identity", "signer", "files", "sockets", "children"}
 # Field names a process monitor could expose and this one must not. Checked against every key
 # in the JSON report, at every depth.
 FORBIDDEN_KEYS = {"cmdline", "cmd", "args", "argv", "exe", "executable", "path", "cwd",
@@ -93,7 +93,7 @@ def test_hundred_concurrent_report_reads_during_live_ticks_all_succeed_and_are_w
                                        ("on_screen", "unseen_busy", "unseen_idle")}
         else:
             assert body.startswith(b"# proccity report") and body.rstrip().endswith(
-                b"endpoint components.")
+                b"never whether it is safe.")
 
 
 def test_thousand_ticks_do_not_grow_sampler_state_or_leak_threads():
@@ -167,7 +167,7 @@ def test_hostile_process_names_cannot_inject_or_leak_into_markdown():
     body = md.split("## Unseen & busy")[1].split("## Unseen & idle")[0]
     rows = [ln for ln in body.splitlines() if ln.startswith("| ")]
     assert len(rows) == 1 + len(hostile), "a newline in a name split a table row"
-    assert all(ln.count("|") - ln.count("\\|") == 8 and ln.endswith("|") for ln in rows[1:])
+    assert all(ln.count("|") - ln.count("\\|") == 12 and ln.endswith("|") for ln in rows[1:])
     assert "| evil\\|name\\| |" in md and "two lines" in md
     assert "\n# heading" not in md and "\n## another" not in md
     # The report is text/markdown; a name is data. No key=value heuristics on our side either:
@@ -229,3 +229,47 @@ def test_enrich_never_marks_on_screen_without_a_screen_pid_and_rates_cannot_be_n
     s.rates_from({2: 100}, 0.0)
     assert all(v >= 0 for v in s.rates_from({2: 50}, 1.0).values())     # counter reset -> drop
     assert all(v >= 0 for v in s.rates_from({2: 60}, 2.0).values())
+
+
+# ---- new fields: identity, signer, counts, sources ----------------------------------------
+
+TEAM_ID = re.compile(r"^[A-Z0-9]{10}$")
+SIGNER_WORDS = {"", "Apple", "ad-hoc", "unsigned", "invalid"}
+SOURCES = {"screen": {"quartz", "frontmost-only", "win32", "x11", "unknown"},
+           "net": {"nettop", "needs-admin", "unavailable"},
+           "identity": {"codesign", "unknown"}}
+
+
+def test_live_identity_and_counts_fields_hold_no_paths_or_free_text(live_city):
+    """The identity check reads codesign output that names executable paths; the counts read
+    psutil data that names files and peers. None of that may survive into a row."""
+    from proccity.identity import IdentityChecker
+    city = City(interval=60, start=False, net=NetSampler(enabled=False),
+                focus=FocusSampler(enabled=False), identity=IdentityChecker(budget=40))
+    for _ in range(3):
+        city.tick()
+    d = json.loads(city.report_json_bytes())
+    rows = d["on_screen"] + d["unseen_busy"] + d["unseen_idle"]
+    assert any(r["identity"] == "verified" for r in rows), "expected some verified rows on macOS"
+    for r in rows:
+        assert r["identity"] in ("verified", "unverified", "unknown")
+        assert r["signer"] in SIGNER_WORDS or TEAM_ID.match(r["signer"]), r["signer"]
+        assert "/" not in r["signer"] and "\\" not in r["signer"]
+        assert r["files"] is None or isinstance(r["files"], int)
+        assert r["sockets"] is None or isinstance(r["sockets"], int)
+        assert isinstance(r["children"], int)
+    for key, allowed in SOURCES.items():
+        assert d["sources"][key] in allowed
+
+
+def test_report_sources_and_placeholders_are_honest_when_nothing_is_measured():
+    from proccity.report import Sources, build_report, render_markdown
+    procs = [Proc(10, 1, "a", "u", 9.0, 1, 1, "r")]
+    rep = build_report(procs, set(), None, t=0.0, cores=1, mem_total=1,
+                       sources=Sources(screen="unknown", net="needs-admin", identity="unknown"))
+    md = render_markdown(rep, "now")
+    assert "On-screen set: **unknown**" in md and "Network: **not measured**" in md
+    assert "Identity: not checked" in md
+    assert "| needs admin |" in md and "| 0 B/s |" not in md      # never a fake zero
+    assert "| unknown |" in md and "| – | – |" in md                # id unknown, counts denied
+    assert "safe" not in md.lower().replace("never whether it is safe", "")
