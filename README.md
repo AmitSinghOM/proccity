@@ -145,6 +145,20 @@ it would remove that dependency; see the review notes for why it is not done yet
 .venv/bin/ruff check . && .venv/bin/pytest
 ```
 
+### Pre-push gate
+
+```bash
+git config core.hooksPath .githooks     # once per clone
+```
+
+`.githooks/pre-push` runs ruff, the test suite, and a
+[`cqa-analyzer`](https://pypi.org/project/cqa-analyzer/) gate before every push, each judged
+by its exit code. The analyzer runs `--offline` (sockets denied while it works) and compares
+against `.cqa-baseline.json`, a file of SHA-256 fingerprints only — no paths, messages or
+snippets — so any finding that is not already accepted fails the push. To accept one on
+purpose, regenerate the baseline and commit it with the change that introduced the finding;
+the diff then shows the acceptance.
+
 `proccity/layout.py` is a pure module (no psutil, no I/O), so the layout tests cover district
 grouping, lot stability, block release and reuse, orphan re-parenting, no-overlap, commons
 overflow (a family bigger than a block spills into the commons rather than vanishing) and the

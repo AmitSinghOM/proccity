@@ -1,0 +1,45 @@
+#!/bin/sh
+# proccity pre-push gate. Installed with:  git config core.hooksPath .githooks
+#
+# Three checks, each gated on its EXIT CODE, never on eyeballing output:
+#   1. ruff           -- lint
+#   2. pytest         -- the suite, minus the headless-Chrome tests (CI runs those with
+#                        PROCCITY_REQUIRE_BROWSER=1; locally they skip or fail on a missing
+#                        console channel and would block every push)
+#   3. cqa-analyzer   -- privacy-first static gate against the committed hashed baseline:
+#                        any finding not already in .cqa-baseline.json fails the push.
+#                        --offline denies sockets while it runs; --strict refuses to pass
+#                        an incomplete analysis as green.
+#
+# To accept a finding on purpose, regenerate the baseline and commit it in the same change:
+#   .venv/bin/python -m cqa_analyzer --offline --write-baseline .cqa-baseline.json .
+# Skip once (not recommended):  git push --no-verify
+set -eu
+
+cd "$(git rev-parse --show-toplevel)"
+
+PY=".venv/bin/python"
+if [ ! -x "$PY" ]; then
+  echo "pre-push: no .venv -- run: uv venv --python 3.12 .venv && uv pip install --python .venv/bin/python -e '.[dev,mac]' cqa-analyzer" >&2
+  exit 1
+fi
+for mod in ruff pytest cqa_analyzer; do
+  "$PY" -c "import $mod" 2>/dev/null || { echo "pre-push: $mod missing -- uv pip install --python $PY -e '.[dev]' cqa-analyzer" >&2; exit 1; }
+done
+
+echo "pre-push: ruff"
+"$PY" -m ruff check . --quiet
+
+echo "pre-push: pytest"
+"$PY" -m pytest -q --deselect tests/test_browser.py
+
+echo "pre-push: cqa gate (offline, baseline .cqa-baseline.json)"
+"$PY" -m cqa_analyzer --offline --strict --baseline .cqa-baseline.json --new-findings-only \
+  --fail-on warning --output-format text . || {
+  code=$?
+  echo "pre-push: cqa gate failed (exit $code). New findings above. Fix them, or if intended," >&2
+  echo "  regenerate the baseline and commit it with this change (see top of .githooks/pre-push)." >&2
+  exit "$code"
+}
+
+echo "pre-push: all gates passed"
