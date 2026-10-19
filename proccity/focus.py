@@ -77,19 +77,25 @@ class FocusSampler:
         """Pids owning an on-screen, normal-layer window. Falls back to {frontmost}."""
         front = self.frontmost_pid()
         pids: set[int] = {front} if front is not None else set()
-        if not self.enabled or Quartz is None:
-            if self.enabled and not self._warned:
+        if not self.enabled:
+            return pids
+        if Quartz is None:
+            if not self._warned:
                 log.info("Quartz not installed (pip install 'proccity[mac]'); "
                          "on-screen set is the frontmost app only")
                 self._warned = True
             return pids
-        try:
-            opts = (Quartz.kCGWindowListOptionOnScreenOnly
-                    | Quartz.kCGWindowListExcludeDesktopElements)
-            for w in Quartz.CGWindowListCopyWindowInfo(opts, Quartz.kCGNullWindowID) or []:
-                # layer 0 is the normal window layer; menu bar extras and overlays sit above
-                if w.get("kCGWindowLayer", 0) == 0 and "kCGWindowOwnerPID" in w:
-                    pids.add(int(w["kCGWindowOwnerPID"]))
-        except Exception:  # a Quartz hiccup must not stop the sampler
-            log.debug("window list failed", exc_info=True)
-        return pids
+        return pids | _quartz_window_owners()
+
+
+def _quartz_window_owners() -> set[int]:
+    """Owner pids of every on-screen window on the normal layer (0). Menu bar extras and
+    overlays sit on higher layers and are not 'what the user is looking at'."""
+    try:
+        opts = Quartz.kCGWindowListOptionOnScreenOnly | Quartz.kCGWindowListExcludeDesktopElements
+        windows = Quartz.CGWindowListCopyWindowInfo(opts, Quartz.kCGNullWindowID) or []
+    except Exception:  # a Quartz hiccup on the sampler thread must not stop the city
+        log.debug("window list failed", exc_info=True)
+        return set()
+    return {int(w["kCGWindowOwnerPID"]) for w in windows
+            if w.get("kCGWindowLayer", 0) == 0 and "kCGWindowOwnerPID" in w}

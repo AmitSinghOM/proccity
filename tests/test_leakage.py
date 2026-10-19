@@ -202,7 +202,8 @@ def test_helpers_only_ask_for_what_the_report_shows():
     assert focus.FRONT_ARGV == ("/usr/bin/lsappinfo", "front")
     # Only "pid" is requested from lsappinfo info, so names, bundle paths and exe paths never
     # enter the process even transiently.
-    src = open(focus.__file__, encoding="utf-8").read()
+    with open(focus.__file__, encoding="utf-8") as fh:
+        src = fh.read()
     assert '"info", "-only", "pid"' in src
 
 

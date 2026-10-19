@@ -38,6 +38,12 @@ STATIC_FILES = {
     "/static/app.css": ("app.css", "text/css; charset=utf-8"),
 }
 LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "[::1]"})
+# Generated responses, same allowlist idea: path -> (content type, producer on the City).
+API = {
+    "/api/snapshot": ("application/json", lambda c: c.snapshot_bytes()),
+    "/report.json": ("application/json", lambda c: c.report_json_bytes()),
+    "/report.md": ("text/markdown; charset=utf-8", lambda c: c.report_markdown_bytes()),
+}
 
 
 def sample() -> list[Proc]:
@@ -190,13 +196,9 @@ def make_handler(city: City):
                 self._send(421, "text/plain", b"proccity only answers to loopback hosts\n", head)
                 return
             path = self.path.split("?", 1)[0]
-            if path == "/api/snapshot":
-                self._send(200, "application/json", city.snapshot_bytes(), head)
-            elif path == "/report.json":
-                self._send(200, "application/json", city.report_json_bytes(), head)
-            elif path == "/report.md":
-                self._send(200, "text/markdown; charset=utf-8", city.report_markdown_bytes(),
-                           head)
+            if path in API:
+                ctype, producer = API[path]
+                self._send(200, ctype, producer(city), head)
             elif path in STATIC_FILES:
                 name, ctype = STATIC_FILES[path]
                 self._send(200, ctype, (STATIC / name).read_bytes(), head)
