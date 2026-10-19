@@ -13,6 +13,9 @@ dependencies = ["psutil==7.2.2"]
 
 [project.optional-dependencies]
 dev = ["pytest==9.1.1", "ruff==0.15.4"]
+# On-screen window detection on macOS. Optional: without it the on-screen set is just the
+# frontmost app (from lsappinfo), which needs nothing extra.
+mac = ["pyobjc-framework-Quartz==12.1"]
 
 [project.scripts]
 proccity = "proccity.server:main"

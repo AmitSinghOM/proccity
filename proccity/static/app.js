@@ -73,9 +73,14 @@ function restyle(e) {
   const b = e.data, m = e.body.material;
   const glow = Math.min(1, b.cpu / 100);          // one full core lights the windows fully
   const dim = needle && !matches(b);
+  // Unseen work (no visible window, and nothing it descends from has one) fades toward
+  // concrete grey. On-screen apps keep their neighbourhood colour: those are the user's.
+  const unseen = b.on_screen === false && !needle;
   m.color.copy(bodyColor(b)); if (dim) m.color.lerp(new THREE.Color(0x9edcff), 0.7);
+  if (unseen) m.color.lerp(new THREE.Color(0xb9b6b0), 0.55);
   m.emissive.setHSL(matches(b) ? 0.58 : 0.08, 1, dim ? 0 : 0.35 * glow);
   e.roof.material.color.copy(roofColor(b)); if (dim) e.roof.material.color.lerp(new THREE.Color(0x9edcff), 0.7);
+  if (unseen) e.roof.material.color.lerp(new THREE.Color(0xb9b6b0), 0.4);
   e.wobble = b.cpu > 60 ? Math.min(1, (b.cpu - 60) / 100) : 0;
 }
 
@@ -133,12 +138,15 @@ function puff(x, y, z) {
 }
 
 function fmtMiB(rss) { return (rss / 2 ** 20).toFixed(0) + ' MiB'; }
+function fmtRate(bps) { return bps >= 2 ** 20 ? (bps / 2 ** 20).toFixed(1) + ' MiB/s' : (bps / 1024).toFixed(0) + ' KiB/s'; }
 function quip(b) {
   if (b.status === 'zombie') return '🧟 undead. waiting for a parent to notice.';
   if (b.cpu >= 100) return '🔥 burning more than one whole core.';
+  if (b.net_rate >= 2 ** 20) return '📡 moving ' + fmtRate(b.net_rate) + (b.on_screen ? '.' : ' with no window open.');
   if (b.cpu >= 50) return '🏃 sweating.';
   if (b.rss >= 2 ** 30) return '🐘 owns more RAM than your first computer.';
   if (b.pid === mayorPid) return '👑 the Mayor. biggest landlord in town.';
+  if (b.on_screen === false && b.cpu >= 5) return '🕵️ busy, and you cannot see it. check /report.md';
   if (b.status === 'sleeping' || b.status === 'idle') return '😴 zzz.';
   if (b.threads >= 64) return '🐙 more threads than a sweater.';
   return '🙂 minding its own business.';

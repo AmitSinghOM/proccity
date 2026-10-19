@@ -17,12 +17,16 @@ import logging
 import sys
 import threading
 import time
+from dataclasses import replace
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 import psutil
 
+from .focus import FocusSampler
 from .layout import CityState, Proc, layout
+from .netio import NetSampler
+from .report import Report, build_report, expand_to_families, render_markdown
 
 log = logging.getLogger("proccity")
 STATIC = Path(__file__).parent / "static"
@@ -34,6 +38,12 @@ STATIC_FILES = {
     "/static/app.css": ("app.css", "text/css; charset=utf-8"),
 }
 LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "[::1]"})
+# Generated responses, same allowlist idea: path -> (content type, producer on the City).
+API = {
+    "/api/snapshot": ("application/json", lambda c: c.snapshot_bytes()),
+    "/report.json": ("application/json", lambda c: c.report_json_bytes()),
+    "/report.md": ("text/markdown; charset=utf-8", lambda c: c.report_markdown_bytes()),
+}
 
 
 def sample() -> list[Proc]:
@@ -55,36 +65,58 @@ def sample() -> list[Proc]:
     return procs
 
 
+def enrich(procs: list[Proc], net_rates: dict[int, float], screen_pids: set[int]) -> list[Proc]:
+    """Pure: stamp each Proc with its network rate and whether its family is on screen."""
+    visible = expand_to_families(procs, screen_pids)
+    return [replace(p, net_rate=net_rates.get(p.pid, 0.0), on_screen=p.pid in visible)
+            for p in procs]
+
+
 class City:
     """Samples on a background thread so HTTP requests never block on psutil."""
 
-    def __init__(self, interval: float, start: bool = True) -> None:
+    def __init__(self, interval: float, start: bool = True, net: NetSampler | None = None,
+                 focus: FocusSampler | None = None) -> None:
         self.interval = interval
         self.state = CityState()
+        self.net = net if net is not None else NetSampler()
+        self.focus = focus if focus is not None else FocusSampler()
         self._lock = threading.Lock()
         self._stop = threading.Event()
         self._snapshot: dict = {"t": 0.0, "interval": interval, "cores": psutil.cpu_count() or 1,
-                                "mem_total": 0, "mem_used": 0, "buildings": []}
+                                "mem_total": 0, "mem_used": 0, "frontmost": None,
+                                "buildings": []}
+        self._report: Report | None = None
         if start:
             self.tick()  # first paint immediately; cpu reads 0 until the second sample
             threading.Thread(target=self._loop, daemon=True, name="proccity-sampler").start()
 
     def tick(self) -> None:
         procs = sample()
+        net_rates = self.net.sample()
+        screen_pids = self.focus.screen_pids()
+        frontmost = self.focus.frontmost_pid() if screen_pids else None
+        procs = enrich(procs, net_rates, screen_pids)
         buildings = layout(procs, self.state)
         vm = psutil.virtual_memory()
+        now = round(time.time(), 3)
+        cores = psutil.cpu_count() or 1
         snap = {
-            "t": round(time.time(), 3),
+            "t": now,
             "interval": self.interval,
-            "cores": psutil.cpu_count() or 1,
+            "cores": cores,
             # real machine numbers for the HUD: summing RSS double-counts shared pages and
             # can exceed physical RAM, which makes "rent" a lie
             "mem_total": vm.total,
             "mem_used": vm.total - vm.available,
+            "frontmost": frontmost,
             "buildings": [b.__dict__ for b in buildings],
         }
+        report = build_report(procs, screen_pids, frontmost, t=now, cores=cores,
+                              mem_total=vm.total)
         with self._lock:
             self._snapshot = snap
+            self._report = report
 
     def _safe_tick(self) -> None:
         try:
@@ -103,6 +135,20 @@ class City:
         with self._lock:
             snap = self._snapshot
         return json.dumps(snap, separators=(",", ":")).encode()
+
+    def report_json_bytes(self) -> bytes:
+        with self._lock:
+            rep = self._report
+        body = rep.to_dict() if rep else {"error": "no sample yet"}
+        return json.dumps(body, separators=(",", ":")).encode()
+
+    def report_markdown_bytes(self) -> bytes:
+        with self._lock:
+            rep = self._report
+        if rep is None:
+            return b"# proccity report\n\nno sample yet\n"
+        when = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(rep.t))
+        return render_markdown(rep, when).encode()
 
 
 def host_is_loopback(host_header: str | None) -> bool:
@@ -150,8 +196,9 @@ def make_handler(city: City):
                 self._send(421, "text/plain", b"proccity only answers to loopback hosts\n", head)
                 return
             path = self.path.split("?", 1)[0]
-            if path == "/api/snapshot":
-                self._send(200, "application/json", city.snapshot_bytes(), head)
+            if path in API:
+                ctype, producer = API[path]
+                self._send(200, ctype, producer(city), head)
             elif path in STATIC_FILES:
                 name, ctype = STATIC_FILES[path]
                 self._send(200, ctype, (STATIC / name).read_bytes(), head)

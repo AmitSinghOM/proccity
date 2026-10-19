@@ -279,3 +279,69 @@ def test_ci_requires_the_browser_smoke_test():
     """SDET: a skip in CI is a silent hole. The workflow must set the REQUIRE flag."""
     ci = (STATIC.parent.parent / ".github" / "workflows" / "ci.yml").read_text()
     assert 'PROCCITY_REQUIRE_BROWSER: "1"' in ci
+
+
+# ---- Report: on-screen vs unseen, served under the same guard ---------------------------
+
+def test_report_endpoints_are_served_only_to_loopback_with_the_same_headers(server):
+    for path, ctype in (("/report.json", "application/json"),
+                        ("/report.md", "text/markdown; charset=utf-8")):
+        status, h, body = get(server, path, host="127.0.0.1")
+        assert status == 200 and h["Content-Type"] == ctype and body
+        assert h["X-Content-Type-Options"] == "nosniff" and h["Cache-Control"] == "no-store"
+        status, _, body = get(server, path, host="attacker.example")
+        assert status == 421 and b"unseen" not in body
+
+
+def test_report_json_partitions_the_live_process_table(server):
+    _, _, snap_body = get(server, "/api/snapshot", host="127.0.0.1")
+    _, _, rep_body = get(server, "/report.json", host="127.0.0.1")
+    snap, rep = json.loads(snap_body), json.loads(rep_body)
+    buckets = rep["on_screen"] + rep["unseen_busy"] + rep["unseen_idle"]
+    assert sorted(r["pid"] for r in buckets) == sorted(b["pid"] for b in snap["buildings"])
+    assert rep["totals"] == {k: len(rep[k]) for k in ("on_screen", "unseen_busy", "unseen_idle")}
+    assert "does not judge" in rep["note"]
+    assert {"net_rate", "on_screen"} <= set(snap["buildings"][0])
+
+
+def test_report_markdown_has_the_three_sections_and_a_timestamp(server):
+    _, _, body = get(server, "/report.md", host="127.0.0.1")
+    md = body.decode()
+    assert re.search(r"^# proccity report — \d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$", md, re.M)
+    for head in ("## On screen (", "## Unseen & busy (", "## Unseen & idle ("):
+        assert head in md
+
+
+def test_report_before_first_sample_says_so_instead_of_crashing():
+    city = City(interval=60, start=False)
+    assert json.loads(city.report_json_bytes()) == {"error": "no sample yet"}
+    assert b"no sample yet" in city.report_markdown_bytes()
+
+
+def test_enrich_marks_families_and_rates_without_touching_other_fields():
+    from proccity.layout import Proc
+    from proccity.server import enrich
+
+    procs = [Proc(10, 1, "app", "u", 1.0, 1, 1, "r"), Proc(11, 10, "helper", "u", 2.0, 2, 2, "r"),
+             Proc(20, 1, "daemon", "u", 3.0, 3, 3, "r")]
+    out = enrich(procs, {11: 512.0, 20: 7.0}, {10})
+    by = {p.pid: p for p in out}
+    assert (by[10].on_screen, by[11].on_screen, by[20].on_screen) == (True, True, False)
+    assert (by[10].net_rate, by[11].net_rate, by[20].net_rate) == (0.0, 512.0, 7.0)
+    assert by[11].cpu == 2.0 and by[11].name == "helper"       # everything else untouched
+
+
+def test_city_uses_injected_samplers_and_a_dead_helper_does_not_blank_the_city():
+    """Both helpers are optional: a city built with disabled samplers still paints, and
+    every building is honestly 'unseen' with a 0 rate rather than missing."""
+    from proccity.focus import FocusSampler
+    from proccity.netio import NetSampler
+
+    city = City(interval=60, start=False, net=NetSampler(enabled=False),
+                focus=FocusSampler(enabled=False))
+    city.tick()
+    snap = json.loads(city.snapshot_bytes())
+    assert snap["buildings"] and snap["frontmost"] is None
+    assert all(b["on_screen"] is False and b["net_rate"] == 0 for b in snap["buildings"])
+    rep = json.loads(city.report_json_bytes())
+    assert rep["on_screen"] == [] and rep["frontmost"] is None
