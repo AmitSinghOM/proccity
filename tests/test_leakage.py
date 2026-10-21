@@ -28,7 +28,8 @@ from proccity.report import Row, build_report, render_markdown
 from proccity.server import City, enrich, make_handler
 
 ROW_FIELDS = {"pid", "ppid", "name", "user", "cpu", "rss", "net_rate", "threads", "status",
-              "kind", "why", "identity", "signer", "files", "sockets", "children"}
+              "kind", "why", "identity", "signer", "files", "sockets", "children",
+              "disk_rate", "threads_active", "top_thread_share"}
 # Field names a process monitor could expose and this one must not. Checked against every key
 # in the JSON report, at every depth.
 FORBIDDEN_KEYS = {"cmdline", "cmd", "args", "argv", "exe", "executable", "path", "cwd",
@@ -104,6 +105,14 @@ def test_thousand_ticks_do_not_grow_sampler_state_or_leak_threads():
         live = {pid: pid * 7 + i for pid in range(i, i + 50)}   # 50 live pids, all churning
         net.rates_from(live, now=float(i))
         assert len(net._last) == 50
+    from proccity.diskio import DiskSampler
+    from proccity.threads import ThreadSampler
+    disk, thr = DiskSampler(enabled=False), ThreadSampler(enabled=False)
+    for i in range(1000):
+        live = {pid: pid * 7 + i for pid in range(i, i + 50)}
+        disk.rates_from(live, now=float(i))
+        thr.splits_from({pid: {1: i, 2: i * 2} for pid in live})
+        assert len(disk._rates.last) == 50 and len(thr._last) == 50
     f = FocusSampler(enabled=False)
     before = threading.active_count()
     for _ in range(1000):
@@ -167,7 +176,7 @@ def test_hostile_process_names_cannot_inject_or_leak_into_markdown():
     body = md.split("## Unseen & busy")[1].split("## Unseen & idle")[0]
     rows = [ln for ln in body.splitlines() if ln.startswith("| ")]
     assert len(rows) == 1 + len(hostile), "a newline in a name split a table row"
-    assert all(ln.count("|") - ln.count("\\|") == 12 and ln.endswith("|") for ln in rows[1:])
+    assert all(ln.count("|") - ln.count("\\|") == 14 and ln.endswith("|") for ln in rows[1:])
     assert "| evil\\|name\\| |" in md and "two lines" in md
     assert "\n# heading" not in md and "\n## another" not in md
     # The report is text/markdown; a name is data. No key=value heuristics on our side either:
@@ -237,7 +246,9 @@ TEAM_ID = re.compile(r"^[A-Z0-9]{10}$")
 SIGNER_WORDS = {"", "Apple", "ad-hoc", "unsigned", "invalid"}
 SOURCES = {"screen": {"quartz", "frontmost-only", "win32", "x11", "unknown"},
            "net": {"nettop", "needs-admin", "unavailable"},
-           "identity": {"codesign", "unknown"}}
+           "identity": {"codesign", "unknown"},
+           "disk": {"rusage", "psutil", "unavailable"},
+           "threads": {"libproc", "psutil", "unavailable"}}
 
 
 def test_live_identity_and_counts_fields_hold_no_paths_or_free_text(live_city):
@@ -258,8 +269,18 @@ def test_live_identity_and_counts_fields_hold_no_paths_or_free_text(live_city):
         assert r["files"] is None or isinstance(r["files"], int)
         assert r["sockets"] is None or isinstance(r["sockets"], int)
         assert isinstance(r["children"], int)
+        _assert_measured_or_none(r)
     for key, allowed in SOURCES.items():
         assert d["sources"][key] in allowed
+
+
+def _assert_measured_or_none(r: dict) -> None:
+    """The three newest fields are a number when measured and None when not -- never a 0
+    standing in for 'could not look', and the share is a proper fraction."""
+    disk, active, share = r["disk_rate"], r["threads_active"], r["top_thread_share"]
+    assert disk is None or (isinstance(disk, float) and disk >= 0)
+    assert active is None or 0 <= active <= r["threads"]
+    assert share is None or 0.0 <= share <= 1.0
 
 
 def test_report_sources_and_placeholders_are_honest_when_nothing_is_measured():

@@ -136,7 +136,8 @@ def test_json_shape_is_stable_and_serialisable():
     assert d["frontmost"]["pid"] == BROWSER
     row = d["unseen_busy"][0]
     assert {"pid", "ppid", "name", "user", "cpu", "rss", "net_rate", "threads", "status",
-            "kind", "why", "identity", "signer", "files", "sockets", "children"} == set(row)
+            "kind", "why", "identity", "signer", "files", "sockets", "children",
+            "disk_rate", "threads_active", "top_thread_share"} == set(row)
 
 
 def test_markdown_has_three_sections_caps_idle_rows_and_escapes_pipes():

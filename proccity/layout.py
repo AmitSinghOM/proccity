@@ -43,6 +43,9 @@ class Proc:
     files: int | None = None    # open files; None = not permitted to look
     sockets: int | None = None  # inet sockets; None = not permitted to look
     children: int = 0           # direct children
+    disk_rate: float | None = None      # bytes/s to+from storage; None = not measured
+    threads_active: int | None = None   # threads whose CPU moved last tick; None = not measured
+    top_thread_share: float | None = None  # 0..1, share of that movement in the busiest thread
 
 
 @dataclass
@@ -66,6 +69,9 @@ class Building:
     files: int | None = None
     sockets: int | None = None
     children: int = 0
+    disk_rate: float | None = None
+    threads_active: int | None = None
+    top_thread_share: float | None = None
 
 
 @dataclass
@@ -229,5 +235,9 @@ def layout(procs: list[Proc], state: CityState) -> list[Building]:
                 net_rate=round(p.net_rate, 1), on_screen=p.on_screen,
                 identity=p.identity, signer=p.signer,
                 files=p.files, sockets=p.sockets, children=p.children,
+                disk_rate=None if p.disk_rate is None else round(p.disk_rate, 1),
+                threads_active=p.threads_active,
+                top_thread_share=(None if p.top_thread_share is None
+                                  else round(p.top_thread_share, 3)),
             ))
     return out

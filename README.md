@@ -60,7 +60,7 @@ three buckets:
 | Bucket | Meaning |
 | --- | --- |
 | **On screen** | It, or an ancestor, owns a visible window. A browser's helpers count as on screen because the browser is: you are driving that work. |
-| **Unseen & busy** | No window, and right now it is burning CPU (≥ 5 %), moving bytes (≥ 50 KiB/s) or holding ≥ 1 GiB. This is the list worth reading. |
+| **Unseen & busy** | No window, and right now it is burning CPU (≥ 5 %), moving bytes over the network (≥ 50 KiB/s) or to disk (≥ 1 MiB/s), or holding ≥ 1 GiB. This is the list worth reading. |
 | **Unseen & idle** | No window, nothing much happening. Counted, top 15 by memory listed. |
 
 Each row shows cpu, memory, network rate, **identity**, how many files / sockets / children it
@@ -108,6 +108,14 @@ touches when is root on every OS, so proccity does not do it.
 | network rate per process | yes, `nettop`, no root | **needs admin** (ETW) | **needs admin** (`CAP_NET_RAW`) | needs admin |
 | identity | yes, `codesign` | unknown (not yet) | unknown (not yet) | unknown |
 | files / sockets / children | yes | yes | yes | yes |
+| disk rate per process | yes, your own processes (libproc `proc_pid_rusage`, no root) | your own processes (`GetProcessIoCounters`) | your own processes (`/proc/<pid>/io`) | same as X11 |
+| thread split (how many threads are hot, share of the busiest) | yes, your own processes (libproc `proc_pidinfo`, no root) | your own processes | your own processes | same as X11 |
+
+Other users' processes -- root daemons, other logins -- show a dash in the disk and thread
+columns on every OS: no kernel hands those counters to an ordinary user, and proccity does
+not ask for root. The split is a fact about the process, not advice: proccity never tells you
+to throttle or re-prioritise anything, because the people who can fix how a process does its
+I/O are the ones who wrote it.
 
 Where a signal cannot be measured the report says so — `needs admin`, `unknown`, a dash —
 rather than printing a zero that looks like a measurement. Every report opens with a "What this
@@ -174,12 +182,19 @@ The snapshot exposes process names, users and memory for this machine, so:
   is empty, logged once, and the city keeps running. `nettop` is asked for per-process byte
   counts only (`-P`), never for remote addresses; `codesign`'s executable-path line is parsed
   out and discarded. Windows uses `ctypes` against `user32`/`dwmapi` and runs no subprocess.
+- **Library calls, pinned.** The disk rate and thread split on macOS come from two libproc
+  functions (`proc_pid_rusage`, `proc_pidinfo`) called through `ctypes` -- the same calls
+  `top` and `ps -M` make, no subprocess, no root. Each struct is declared field by field from
+  the SDK header and its size is asserted before the first call, so a layout change fails
+  loudly instead of reading garbage as bytes; tests pin the field offsets. Thread names come
+  back in the struct and are discarded; thread ids never leave the module.
 - **What the report does not contain:** command lines, environment variables, working
-  directories, executable paths, window titles, remote addresses, file names. Rows carry pid,
-  parent pid, name, user, cpu, memory, rate, threads, status, kind, the reason it was called
-  busy, an identity state with its signer (a Team ID or one of `Apple`, `ad-hoc`, `unsigned`,
-  `invalid`), and three counts. `tests/test_leakage.py` asserts every row key against that
-  allowlist and greps the live report for path, address and environment shapes.
+  directories, executable paths, window titles, remote addresses, file names, thread names or
+  ids. Rows carry pid, parent pid, name, user, cpu, memory, network rate, disk rate, threads,
+  status, kind, the reason it was called busy, an identity state with its signer (a Team ID or
+  one of `Apple`, `ad-hoc`, `unsigned`, `invalid`), three counts, and two thread numbers (how
+  many moved, the busiest one's share). `tests/test_leakage.py` asserts every row key against
+  that allowlist and greps the live report for path, address and environment shapes.
 
 The frontend loads Three.js from unpkg, so the page needs internet on first load. Vendoring
 it would remove that dependency; see the review notes for why it is not done yet.

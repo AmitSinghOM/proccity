@@ -151,7 +151,10 @@ function quip(b) {
   if (b.identity === 'unverified') return '🪪 ' + (b.signer === 'invalid' ? 'signature does not match its code.' : b.signer === 'unsigned' ? 'carries no signature at all.' : 'self-signed, no authority vouches for it.') + ' not a verdict, a fact.';
   if (b.cpu >= 100) return '🔥 burning more than one whole core.';
   if (b.net_rate >= 2 ** 20) return '📡 moving ' + fmtRate(b.net_rate) + (b.on_screen ? '.' : ' with no window open.');
+  if (b.disk_rate >= 2 ** 20) return '💾 moving ' + fmtRate(b.disk_rate) + ' to or from disk.';
   if (b.cpu >= 50) return '🏃 sweating.';
+  if (b.cpu >= 20 && b.threads_active === 1 && b.threads >= 8) return '🧵 ' + b.threads + ' threads, one doing all the work.';
+  if (b.cpu >= 20 && b.threads_active >= 8 && b.top_thread_share <= 0.3) return '🧵 ' + b.threads_active + ' threads pulling together.';
   if (b.rss >= 2 ** 30) return '🐘 owns more RAM than your first computer.';
   if (b.pid === mayorPid) return '👑 the Mayor. biggest landlord in town.';
   if (b.on_screen === false && b.cpu >= 5) return '🕵️ busy, and you cannot see it. check /report.md';
@@ -312,7 +315,9 @@ function animate() {
   if (hit) {
     const e = [...buildings.values()].find(e => e.body === hit.object);
     const d = e.data;
-    tip.textContent = `${d.name}  (pid ${d.pid})\nuser    ${d.user}\ncpu     ${d.cpu.toFixed(1)}%\nrss     ${fmtMiB(d.rss)}\nthreads ${d.threads}\nstatus  ${d.status}\n\n${quip(d)}`;
+    const thr = d.threads_active == null ? `${d.threads}` : d.threads_active === 0 ? `${d.threads} (idle)` : `${d.threads} (${d.threads_active} hot, ${Math.round(d.top_thread_share * 100)}% in one)`;
+    const disk = d.disk_rate == null ? '' : `\ndisk    ${fmtRate(d.disk_rate)}`;
+    tip.textContent = `${d.name}  (pid ${d.pid})\nuser    ${d.user}\ncpu     ${d.cpu.toFixed(1)}%\nrss     ${fmtMiB(d.rss)}${disk}\nthreads ${thr}\nstatus  ${d.status}\n\n${quip(d)}`;
     tip.hidden = false; placeTip();
   } else { tip.hidden = true; }
   walk(dt);

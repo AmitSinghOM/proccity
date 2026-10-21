@@ -23,12 +23,14 @@ from pathlib import Path
 
 import psutil
 
+from .diskio import DiskSampler
 from .focus import FocusSampler
 from .identity import IdentityChecker
 from .interact import count_all
 from .layout import CityState, Proc, layout
 from .netio import NetSampler
 from .report import Report, Sources, build_report, expand_to_families, render_markdown
+from .threads import ThreadSampler, ThreadSplit
 
 log = logging.getLogger("proccity")
 STATIC = Path(__file__).parent / "static"
@@ -69,23 +71,29 @@ def sample() -> list[Proc]:
 
 
 def enrich(procs: list[Proc], net_rates: dict[int, float], screen_pids: set[int],
-           identities: dict | None = None, counts: dict | None = None) -> list[Proc]:
+           identities: dict | None = None, counts: dict | None = None,
+           disk_rates: dict[int, float] | None = None,
+           splits: dict[int, ThreadSplit] | None = None) -> list[Proc]:
     """Pure: stamp each Proc with its network rate, on-screen family membership, identity
-    verdict and interaction counts. Missing maps leave the defaults in place."""
+    verdict, interaction counts, disk rate and thread split. Missing maps leave the defaults
+    in place; a pid missing from disk_rates or splits stays None ("not measured")."""
     visible = expand_to_families(procs, screen_pids)
     identities = identities or {}
     counts = counts or {}
+    disk_rates = disk_rates or {}
+    splits = splits or {}
     out = []
     for p in procs:
-        ident = identities.get(p.pid)
-        c = counts.get(p.pid)
-        out.append(replace(
-            p, net_rate=net_rates.get(p.pid, 0.0), on_screen=p.pid in visible,
-            identity=ident.state if ident else p.identity,
-            signer=ident.signer if ident else p.signer,
-            files=c.files if c else p.files, sockets=c.sockets if c else p.sockets,
-            children=c.children if c else p.children,
-        ))
+        fields: dict = {"net_rate": net_rates.get(p.pid, 0.0), "on_screen": p.pid in visible}
+        if ident := identities.get(p.pid):
+            fields.update(identity=ident.state, signer=ident.signer)
+        if c := counts.get(p.pid):
+            fields.update(files=c.files, sockets=c.sockets, children=c.children)
+        if p.pid in disk_rates:
+            fields["disk_rate"] = disk_rates[p.pid]
+        if s := splits.get(p.pid):
+            fields.update(threads_active=s.active, top_thread_share=s.top_share)
+        out.append(replace(p, **fields))
     return out
 
 
@@ -94,13 +102,14 @@ class City:
 
     def __init__(self, interval: float, start: bool = True, net: NetSampler | None = None,
                  focus: FocusSampler | None = None, identity: IdentityChecker | None = None,
-                 counts: bool = True) -> None:
+                 disk: DiskSampler | None = None, threads: ThreadSampler | None = None) -> None:
         self.interval = interval
         self.state = CityState()
         self.net = net if net is not None else NetSampler()
         self.focus = focus if focus is not None else FocusSampler()
         self.identity = identity if identity is not None else IdentityChecker()
-        self.counts = counts
+        self.disk = disk if disk is not None else DiskSampler()
+        self.threads = threads if threads is not None else ThreadSampler()
         self._lock = threading.Lock()
         self._stop = threading.Event()
         self._snapshot: dict = {"t": 0.0, "interval": interval, "cores": psutil.cpu_count() or 1,
@@ -113,23 +122,28 @@ class City:
 
     def _sources(self) -> Sources:
         return Sources(screen=self.focus.source, net=self.net.source,
-                       identity=self.identity.source)
+                       identity=self.identity.source, disk=self.disk.source,
+                       threads=self.threads.source)
 
     def tick(self) -> None:
         procs = sample()
         net_rates = self.net.sample()
+        pids = [p.pid for p in procs]
+        disk_rates = self.disk.sample(pids)
+        splits = self.threads.sample(pids)
         screen_pids = self.focus.screen_pids()
         frontmost = self.focus.frontmost_pid() if screen_pids else None
         visible = expand_to_families(procs, screen_pids)
         # Identity is budgeted per tick: check the unseen and busy first, the user's own
         # visible apps next, then everything else.
         def priority(p: Proc) -> tuple:
-            busy = p.cpu >= 5 or net_rates.get(p.pid, 0.0) >= 50 * 1024 or p.rss >= (1 << 30)
+            busy = (p.cpu >= 5 or net_rates.get(p.pid, 0.0) >= 50 * 1024 or p.rss >= (1 << 30)
+                    or disk_rates.get(p.pid, 0.0) >= (1 << 20))
             return (0 if (busy and p.pid not in visible) else 1 if p.pid in visible else 2,
                     -p.cpu, p.pid)
         identities = self.identity.refresh(procs, priority)
-        counts = count_all({p.pid: p.ppid for p in procs}, enabled=self.counts)
-        procs = enrich(procs, net_rates, screen_pids, identities, counts)
+        counts = count_all({p.pid: p.ppid for p in procs})
+        procs = enrich(procs, net_rates, screen_pids, identities, counts, disk_rates, splits)
         buildings = layout(procs, self.state)
         vm = psutil.virtual_memory()
         now = round(time.time(), 3)

@@ -8,8 +8,8 @@ Three buckets, deliberately neutral:
 
 - **On screen** — the process, or an ancestor of it, owns a visible window. A browser's
   helpers are on screen because the browser is: the user is driving that work.
-- **Unseen & busy** — no visible window, and it is burning CPU, moving bytes, or sitting on a
-  lot of memory right now. This is the list worth reading.
+- **Unseen & busy** — no visible window, and it is burning CPU, moving bytes over the network
+  or to disk, or sitting on a lot of memory right now. This is the list worth reading.
 - **Unseen & idle** — no visible window and nothing much happening. Counted, not dwelt on.
 
 The report says what is unseen. It does not say whether that is bad. On a managed Mac the
@@ -29,6 +29,7 @@ from .layout import ROOT_PPIDS, Proc
 BUSY_CPU = 5.0                 # percent of one core
 BUSY_NET = 50 * 1024           # bytes per second, in + out
 BUSY_RSS = 1 << 30             # 1 GiB resident
+BUSY_DISK = 1 << 20            # 1 MiB/s to or from storage
 IDLE_ROWS = 15                 # how many idle rows the Markdown report lists (by memory)
 
 # Well-known unseen workers. Prefix match on the process name, case-insensitive. This is a
@@ -72,6 +73,9 @@ class Row:
     files: int | None = None    # open files, or None when the OS would not let us look
     sockets: int | None = None  # inet sockets, or None
     children: int = 0
+    disk_rate: float | None = None      # bytes/s to+from storage; None = not measured
+    threads_active: int | None = None   # threads whose CPU moved; None = not measured
+    top_thread_share: float | None = None  # 0..1 of that movement in the busiest thread
 
 
 @dataclass(frozen=True)
@@ -80,6 +84,8 @@ class Sources:
     screen: str = "unknown"     # quartz | frontmost-only | win32 | x11 | unknown
     net: str = "needs-admin"    # nettop | needs-admin | unavailable
     identity: str = "unknown"   # codesign | unknown
+    disk: str = "unavailable"   # rusage | psutil | unavailable
+    threads: str = "unavailable"  # libproc | psutil | unavailable
 
 
 @dataclass
@@ -109,7 +115,7 @@ class Report:
             "on_screen": [asdict(r) for r in self.on_screen],
             "unseen_busy": [asdict(r) for r in self.unseen_busy],
             "unseen_idle": [asdict(r) for r in self.unseen_idle],
-            "thresholds": {"cpu": BUSY_CPU, "net": BUSY_NET, "rss": BUSY_RSS},
+            "thresholds": {"cpu": BUSY_CPU, "net": BUSY_NET, "rss": BUSY_RSS, "disk": BUSY_DISK},
             "note": self.note,
         }
 
@@ -155,6 +161,8 @@ def busy_reasons(p: Proc) -> tuple[str, ...]:
         why.append(f"net {fmt_rate(p.net_rate)}")
     if p.rss >= BUSY_RSS:
         why.append(f"mem {fmt_bytes(p.rss)}")
+    if p.disk_rate is not None and p.disk_rate >= BUSY_DISK:
+        why.append(f"disk {fmt_rate(p.disk_rate)}")
     return tuple(why)
 
 
@@ -162,13 +170,18 @@ def _row(p: Proc, why: tuple[str, ...] = ()) -> Row:
     return Row(pid=p.pid, ppid=p.ppid, name=p.name, user=p.user, cpu=round(p.cpu, 1),
                rss=p.rss, net_rate=round(p.net_rate, 1), threads=p.threads, status=p.status,
                kind=kind_of(p.name), why=why, identity=p.identity, signer=p.signer,
-               files=p.files, sockets=p.sockets, children=p.children)
+               files=p.files, sockets=p.sockets, children=p.children,
+               disk_rate=None if p.disk_rate is None else round(p.disk_rate, 1),
+               threads_active=p.threads_active,
+               top_thread_share=(None if p.top_thread_share is None
+                                 else round(p.top_thread_share, 3)))
 
 
 def _activity(r: Row) -> float:
-    # one number to sort by: a core of CPU, a MiB/s of network and a GiB of memory each
-    # count about the same, so no single axis hides the others
-    return r.cpu / 100 + r.net_rate / (1 << 20) + r.rss / (1 << 30)
+    # one number to sort by: a core of CPU, a MiB/s of network or disk and a GiB of memory
+    # each count about the same, so no single axis hides the others
+    return (r.cpu / 100 + r.net_rate / (1 << 20) + r.rss / (1 << 30)
+            + (r.disk_rate or 0.0) / (1 << 20))
 
 
 def build_report(procs: list[Proc], screen_pids: set[int], frontmost_pid: int | None,
@@ -226,17 +239,31 @@ def _n(v: int | None) -> str:
     return "–" if v is None else str(v)
 
 
+def _disk_cell(r: Row) -> str:
+    return "–" if r.disk_rate is None else fmt_rate(r.disk_rate)
+
+
+def _threads_cell(r: Row) -> str:
+    """`12 (3 hot, 71%)`: thread count, how many moved last tick, share of the busiest."""
+    if r.threads_active is None or r.top_thread_share is None:
+        return str(r.threads)
+    if r.threads_active == 0:
+        return f"{r.threads} (idle)"
+    return f"{r.threads} ({r.threads_active} hot, {r.top_thread_share * 100:.0f}%)"
+
+
 def _table(rows: list[Row], with_why: bool, net_source: str) -> list[str]:
-    head = "| process | pid | kind | identity | cpu | mem | net | files | sockets | children |"
-    rule = "|---|---:|---|---|---:|---:|---:|---:|---:|---:|"
+    head = ("| process | pid | kind | identity | cpu | mem | net | disk | threads | files | "
+            "sockets | children |")
+    rule = "|---|---:|---|---|---:|---:|---:|---:|---|---:|---:|---:|"
     if with_why:
         head += " why |"
         rule += "---|"
     out = [head, rule]
     for r in rows:
         line = (f"| {_md_escape(r.name)} | {r.pid} | {r.kind} | {_id_cell(r)} | {r.cpu:.0f}% | "
-                f"{fmt_bytes(r.rss)} | {_net_cell(r, net_source)} | {_n(r.files)} | "
-                f"{_n(r.sockets)} | {r.children} |")
+                f"{fmt_bytes(r.rss)} | {_net_cell(r, net_source)} | {_disk_cell(r)} | "
+                f"{_threads_cell(r)} | {_n(r.files)} | {_n(r.sockets)} | {r.children} |")
         if with_why:
             line += f" {', '.join(r.why)} |"
         out.append(line)
@@ -263,6 +290,20 @@ _ID_TEXT = {
                 "says who signed it, never whether it is safe.",
     "unknown": "Identity: not checked on this platform.",
 }
+_DISK_TEXT = {
+    "rusage": "Disk: bytes to and from storage per second, from the kernel's per-process "
+              "accounting (libproc); your own processes only, a dash for the rest.",
+    "psutil": "Disk: bytes to and from storage per second, from the OS per-process counters; "
+              "your own processes only, a dash for the rest.",
+    "unavailable": "Disk: **not measured** on this platform.",
+}
+_THREADS_TEXT = {
+    "libproc": "Threads: count, how many used CPU since the last sample, and the share of "
+               "that in the busiest one (libproc); your own processes only.",
+    "psutil": "Threads: count, how many used CPU since the last sample, and the share of "
+              "that in the busiest one; your own processes only.",
+    "unavailable": "Threads: count only; the per-thread split is **not measured** here.",
+}
 
 
 def render_markdown(rep: Report, when: str) -> str:
@@ -275,14 +316,16 @@ def render_markdown(rep: Report, when: str) -> str:
     lines += ["", "What this report could measure here:", "",
               f"- {_SCREEN_TEXT.get(src.screen, _SCREEN_TEXT['unknown'])}",
               f"- {_NET_TEXT.get(src.net, _NET_TEXT['needs-admin'])}",
+              f"- {_DISK_TEXT.get(src.disk, _DISK_TEXT['unavailable'])}",
+              f"- {_THREADS_TEXT.get(src.threads, _THREADS_TEXT['unavailable'])}",
               f"- {_ID_TEXT.get(src.identity, _ID_TEXT['unknown'])}",
               "- Files, sockets, children are counts of what the process holds right now; "
               "a dash means the OS would not let this user look."]
     lines += ["", f"## On screen ({len(rep.on_screen)})", ""]
     lines += _table(rep.on_screen, False, src.net) if rep.on_screen else ["_nothing_"]
     lines += ["", f"## Unseen & busy ({len(rep.unseen_busy)})", "",
-              f"Busy means cpu ≥ {BUSY_CPU:.0f}%, net ≥ {fmt_rate(BUSY_NET)} "
-              f"or mem ≥ {fmt_bytes(BUSY_RSS)}.", ""]
+              f"Busy means cpu ≥ {BUSY_CPU:.0f}%, net ≥ {fmt_rate(BUSY_NET)}, "
+              f"disk ≥ {fmt_rate(BUSY_DISK)} or mem ≥ {fmt_bytes(BUSY_RSS)}.", ""]
     lines += _table(rep.unseen_busy, True, src.net) if rep.unseen_busy else ["_nothing_"]
     idle = rep.unseen_idle
     lines += ["", f"## Unseen & idle ({len(idle)})", ""]

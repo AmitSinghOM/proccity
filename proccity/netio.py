@@ -22,6 +22,8 @@ import subprocess
 import sys
 import time
 
+from .rate import RateTracker
+
 log = logging.getLogger("proccity.netio")
 
 NETTOP = "/usr/bin/nettop"
@@ -69,22 +71,16 @@ class NetSampler:
     def __init__(self, enabled: bool | None = None) -> None:
         self.enabled = sys.platform == "darwin" if enabled is None else enabled
         self.source = "nettop" if self.enabled else "needs-admin"
-        self._last: dict[int, int] = {}
-        self._last_t: float | None = None
+        self._rates = RateTracker()
         self._failed = False
 
     def rates_from(self, counters: dict[int, int], now: float) -> dict[int, float]:
         """Pure step: given fresh cumulative counters, return rates against the previous call."""
-        rates: dict[int, float] = {}
-        if self._last_t is not None:
-            dt = now - self._last_t
-            if dt > 0:
-                for pid, total in counters.items():
-                    prev = self._last.get(pid)
-                    if prev is not None and total >= prev:   # a reused pid restarts at 0
-                        rates[pid] = (total - prev) / dt
-        self._last, self._last_t = counters, now
-        return rates
+        return self._rates.rates_from(counters, now)
+
+    @property
+    def _last(self) -> dict[int, int]:
+        return self._rates.last
 
     def sample(self) -> dict[int, float]:
         if not self.enabled:
