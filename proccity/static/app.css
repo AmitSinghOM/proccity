@@ -12,6 +12,8 @@ html, body { margin: 0; height: 100%; background: #9edcff; color: #24233a; font:
 #top li button { all: unset; display: flex; justify-content: space-between; gap: 8px; width: 100%; padding: 3px 6px; border-radius: 8px; cursor: pointer; color: #24233a; font-weight: 600; }
 #top li button:hover, #top li button:focus-visible { background: #ffe9a8; outline: none; }
 #top li button span:last-child { color: #d94f2b; font-variant-numeric: tabular-nums; }
+#top .quiet { margin: 2px 6px 0; font-size: 12px; color: #6b6b85; font-style: italic; }
+#top .quiet[hidden] { display: none; }
 #tip { position: fixed; z-index: 3; padding: 8px 10px; background: #fffdf5; color: #24233a; border: 3px solid #24233a; border-radius: 12px; box-shadow: 4px 4px 0 #24233a; pointer-events: none; white-space: pre; font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 12px; }
 #tip[hidden] { display: none; }
 #pad { position: fixed; left: 12px; bottom: 10px; z-index: 2; display: grid; grid-template-columns: repeat(3, 44px); gap: 6px; }

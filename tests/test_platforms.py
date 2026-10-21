@@ -94,6 +94,26 @@ def test_x11_sampler_degrades_to_empty_when_xprop_is_missing(monkeypatch):
     assert f.screen_pids() == set() and f.frontmost_pid() is None
 
 
+
+
+def test_x11_sampler_stops_querying_windows_once_the_time_budget_is_spent(monkeypatch):
+    """Three windows, each xprop call 'takes' 0.6 s on a 1.0 s budget measured after the
+    root call: two windows fit, the third is skipped, and the partial set is returned.
+    Without the budget a hung X server costs MAX_WINDOWS timeouts per tick."""
+    calls = []
+    clock = [100.0]
+    real_fake = _x11_fake_run(calls)
+
+    def slow_run(argv, **kw):
+        clock[0] += 0.6
+        return real_fake(argv, **kw)
+    monkeypatch.setattr(focus.subprocess, "run", slow_run)
+    monkeypatch.setattr(focus.time, "monotonic", lambda: clock[0])
+    f = FocusSampler(source="x11")
+    pids = f.screen_pids()
+    window_calls = [c for c in calls if c[1] == "-id"]
+    assert len(window_calls) == 2, window_calls        # third window never queried
+    assert pids == {4242, 4243} and f._slow is True
 # ---- Win32 filter logic (enumeration injected; real EnumWindows is Windows-only) ---------
 
 def test_win32_owner_pids_keep_visible_uncloaked_windows_only():

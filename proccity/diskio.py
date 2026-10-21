@@ -14,7 +14,9 @@ Sources, chosen per platform:
   Apple has kept stable since 10.9; the size is asserted before the first call so a wrong
   layout fails loudly instead of reading garbage as bytes.
 - **Linux, Windows, BSD** — psutil `Process.io_counters()`: `/proc/<pid>/io` on Linux (own
-  user, via the ptrace read rule), `GetProcessIoCounters` on Windows (own processes).
+  user, via the ptrace read rule), `GetProcessIoCounters` on Windows (own processes). The
+  Windows counters are *all* I/O transfers -- files, pipes, devices -- not storage alone, so
+  the column reads a little high there; the report header says so.
 - anything else — `unavailable`; the column is a dash everywhere.
 
 Counters are cumulative since process start, so a rate needs two samples (see rate.py).

@@ -27,10 +27,14 @@ import os
 import re
 import subprocess
 import sys
+import time
 
 log = logging.getLogger("proccity.focus")
 
 TIMEOUT = 2.0
+# The X11 path runs one xprop per window. MAX_WINDOWS caps the count; this caps the clock, so
+# a hung X server (every call timing out) costs one tick about one budget, not 64 timeouts.
+X11_BUDGET = 1.0
 
 # ---- macOS -----------------------------------------------------------------------------
 LSAPPINFO = "/usr/bin/lsappinfo"
@@ -137,6 +141,7 @@ class FocusSampler:
             self.source = source if source is not None else detect_source()
         self.enabled = self.source != "unknown"
         self._warned = False
+        self._slow = False
 
     # -- macOS --------------------------------------------------------------------------
     def _mac_frontmost(self) -> int | None:
@@ -168,7 +173,14 @@ class FocusSampler:
     def _x11_screen(self) -> set[int]:
         wids, _ = parse_xprop_root(_run(XPROP_ROOT_ARGV) or "")
         pids: set[int] = set()
-        for wid in wids:                      # each wid matched _WID in the parser
+        deadline = time.monotonic() + X11_BUDGET
+        for n, wid in enumerate(wids):        # each wid matched _WID in the parser
+            if time.monotonic() > deadline:
+                if not self._slow:
+                    log.warning("xprop is slow; on-screen set is partial (%d of %d windows)",
+                                n, len(wids))
+                    self._slow = True
+                break
             pid, hidden = parse_xprop_window(
                 _run((XPROP, "-id", wid, "_NET_WM_PID", "_NET_WM_STATE")) or "")
             if pid is not None and not hidden:

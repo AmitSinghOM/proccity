@@ -3,6 +3,7 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 
 const $ = id => document.getElementById(id);
 const status = $('status'), tip = $('tip'), q = $('q'), topcpu = $('topcpu'), topmem = $('topmem');
+const topdisk = $('topdisk'), diskquiet = $('diskquiet');
 const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
 
 // ---- a cartoon afternoon ---------------------------------------------------------------
@@ -209,6 +210,11 @@ async function poll() {
       bold(hot), hot === 1 ? ' building on fire' : ' buildings on fire');
     renderTop(topcpu, [...snap.buildings].sort((a, b) => b.cpu - a.cpu).slice(0, 5), b => b.cpu.toFixed(0) + '%');
     renderTop(topmem, [...snap.buildings].sort((a, b) => b.rss - a.rss).slice(0, 5), b => fmtMiB(b.rss));
+    // Only processes that are really moving bytes; a list padded with "0 B/s" would say nothing.
+    const writers = snap.buildings.filter(b => b.disk_rate >= 4096).sort((a, b) => b.disk_rate - a.disk_rate).slice(0, 5);
+    renderTop(topdisk, writers, b => fmtRate(b.disk_rate));
+    diskquiet.hidden = writers.length > 0;
+    diskquiet.textContent = snap.sources && snap.sources.disk === 'unavailable' ? 'disk rate not measured on this platform' : 'disk is quiet right now';
     // poll at the server's own cadence: asking faster returns the same bytes, slower misses samples
     const want = Math.max(500, Math.round((snap.interval || 2) * 1000));
     if (want !== pollMs) { pollMs = want; clearInterval(pollTimer); pollTimer = setInterval(poll, pollMs); }

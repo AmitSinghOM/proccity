@@ -108,7 +108,7 @@ touches when is root on every OS, so proccity does not do it.
 | network rate per process | yes, `nettop`, no root | **needs admin** (ETW) | **needs admin** (`CAP_NET_RAW`) | needs admin |
 | identity | yes, `codesign` | unknown (not yet) | unknown (not yet) | unknown |
 | files / sockets / children | yes | yes | yes | yes |
-| disk rate per process | yes, your own processes (libproc `proc_pid_rusage`, no root) | your own processes (`GetProcessIoCounters`) | your own processes (`/proc/<pid>/io`) | same as X11 |
+| disk rate per process | yes, your own processes (libproc `proc_pid_rusage`, no root) | your own processes (`GetProcessIoCounters`; counts all I/O transfers, not storage alone) | your own processes (`/proc/<pid>/io`) | same as X11 |
 | thread split (how many threads are hot, share of the busiest) | yes, your own processes (libproc `proc_pidinfo`, no root) | your own processes | your own processes | same as X11 |
 
 Other users' processes -- root daemons, other logins -- show a dash in the disk and thread

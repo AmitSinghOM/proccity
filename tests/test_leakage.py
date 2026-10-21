@@ -34,7 +34,9 @@ ROW_FIELDS = {"pid", "ppid", "name", "user", "cpu", "rss", "net_rate", "threads"
 # in the JSON report, at every depth.
 FORBIDDEN_KEYS = {"cmdline", "cmd", "args", "argv", "exe", "executable", "path", "cwd",
                   "environ", "env", "title", "window", "windows", "raddr", "laddr", "remote",
-                  "addr", "address", "ip", "port", "connections", "open_files", "uid"}
+                  "addr", "address", "ip", "port", "connections", "open_files", "uid",
+                  # thread handles from libproc are kernel addresses; the split is numbers only
+                  "tid", "tids", "thread_id", "thread_ids", "handles", "thread_names"}
 # Values that would mean a leak if they ever appeared in the Markdown.
 LEAK_PATTERNS = [
     re.compile(r"/Users/\w"), re.compile(r"/home/\w"), re.compile(r"/private/"),

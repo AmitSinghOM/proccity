@@ -294,7 +294,8 @@ _DISK_TEXT = {
     "rusage": "Disk: bytes to and from storage per second, from the kernel's per-process "
               "accounting (libproc); your own processes only, a dash for the rest.",
     "psutil": "Disk: bytes to and from storage per second, from the OS per-process counters; "
-              "your own processes only, a dash for the rest.",
+              "your own processes only, a dash for the rest (on Windows the counter includes "
+              "all I/O transfers, not storage alone).",
     "unavailable": "Disk: **not measured** on this platform.",
 }
 _THREADS_TEXT = {
